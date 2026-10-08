@@ -1,0 +1,11 @@
+services:
+  tests:
+    mem_limit: 32m
+    cpus: 0.5
+    pids_limit: 64
+    entrypoint: [/src/.verification/faultworker]
+    environment: {GOMEMLIMIT: 16MiB}
+    networks: [core, mta]
+    volumes: [fault_state:/fault]
+volumes:
+  fault_state:

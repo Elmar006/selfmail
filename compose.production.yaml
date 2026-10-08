@@ -1,0 +1,24 @@
+# Apply with --env-file .env.production -f compose.yaml -f compose.production.yaml.
+# Reset COMPOSE_PROFILES to empty in .env.production to disable the development sink.
+services:
+  api:
+    ports: !override ['127.0.0.1:18080:8080', '0.0.0.0:587:1587']
+  postfix:
+    ports: ['0.0.0.0:25:25']
+  rabbitmq:
+    ports: !reset []
+  caddy:
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    profiles: [edge]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 128
+    logging: {driver: json-file, options: {max-size: '10m', max-file: '3'}}
+    volumes: [./deploy/Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
+    environment: {MAIL_API_HOST: '${MAIL_API_HOST:?required in production}'}
+    ports: ['80:80', '443:443']
+    networks: [core, outbound]
+    restart: unless-stopped
+volumes:
+  caddy_data:
+  caddy_config:

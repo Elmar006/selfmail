@@ -1,0 +1,30 @@
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'up{job="selfmail",instance="dispatcher:9090"}'
+        values: '1 0x12 1x8'
+      - series: 'selfmail_broker_consumers{priority="critical"}'
+        values: '2x24'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: SelfmailProcessUnavailable
+        exp_alerts:
+          - exp_labels: {job: selfmail, instance: 'dispatcher:9090', severity: critical}
+            exp_annotations: {summary: 'A selfmail process cannot be scraped'}
+      - eval_time: 5m
+        alertname: SelfmailProcessUnavailable
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'selfmail_messages{status="submission_unknown"}'
+        values: '1x24'
+      - series: 'selfmail_broker_consumers{priority="critical"}'
+        values: '2x24'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SelfmailSubmissionUnknown
+        exp_alerts:
+          - exp_labels: {status: submission_unknown, severity: warning}
+            exp_annotations: {summary: 'SMTP handoff outcome needs reconciliation'}

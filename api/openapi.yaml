@@ -1,0 +1,704 @@
+openapi: 3.1.0
+info:
+  title: Selfmail API
+  version: 1.1.0
+  description: 'Multi-project transactional email via self-hosted Postfix. A 202 confirms
+    durable acceptance. String x-maxBytes limits count UTF-8 bytes; maxLength counts
+    characters. HTTP JSON body: 8 MiB; total decoded body/attachments: 5 MiB; signed
+    MIME: configured 64 KiB..10 MiB. Idempotency records: 90 days by default.'
+servers:
+- url: http://localhost:18080
+security:
+- apiKey: []
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        '200':
+          description: Process alive
+  /readyz:
+    get:
+      security: []
+      responses:
+        '200':
+          description: PostgreSQL and Redis ready
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/messages:
+    post:
+      operationId: sendMessages
+      description: Scope messages:write. Each recipient receives a separate delivery.
+        Reuse the idempotency key and exact normalized request after a network failure.
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+          x-maxBytes: 200
+          description: Maximum 200 UTF-8 bytes; CR, LF and NUL prohibited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRequest'
+      responses:
+        '202':
+          description: Persisted new batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResult'
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '500': &id001
+          $ref: '#/components/responses/Error'
+    get:
+      operationId: listMessages
+      description: Scope messages:read. Descending created_at / UUID cursor.
+      parameters:
+      - in: query
+        name: limit
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - in: query
+        name: before
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Project messages
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - messages
+                - next_cursor
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  next_cursor:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500': *id001
+        '503': *id001
+        '422': *id001
+  /v1/messages/{id}:
+    parameters:
+    - $ref: '#/components/parameters/ID'
+    get:
+      operationId: getMessage
+      description: Scope messages:read. Resources belonging to another project also
+        return 404.
+      responses:
+        '200':
+          description: Message status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+        '410': *id001
+  /v1/messages/{id}/events:
+    parameters:
+    - $ref: '#/components/parameters/ID'
+    get:
+      operationId: getMessageEvents
+      description: Scope messages:read. Monotonic event sequence pagination. A cursor
+        remains valid when new events are appended. Retained tombstones return 410
+        after metadata expiry.
+      parameters:
+      - in: query
+        name: limit
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 1000
+      - in: query
+        name: cursor
+        schema:
+          type: string
+          pattern: ^[0-9]+$
+        description: Previous next_cursor; exclusive event sequence.
+      responses:
+        '200':
+          description: Event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - events
+                - next_cursor
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Event'
+                  next_cursor:
+                    type: string
+                    description: Empty when no further events exist.
+        '404':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+        '410': *id001
+  /v1/messages/{id}/cancel:
+    parameters:
+    - $ref: '#/components/parameters/ID'
+    post:
+      operationId: cancelMessage
+      description: Scope messages:write. Only queued messages can be canceled; repeating
+        a completed cancellation succeeds.
+      responses:
+        '204':
+          description: Canceled
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+  /v1/domains:
+    post:
+      operationId: createSenderDomain
+      description: Scope domains:write. Creates an RSA DKIM key and DNS ownership
+        challenge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - name
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: Domain and required TXT records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainDNS'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '400': *id001
+  /v1/domains/{name}:
+    parameters:
+    - $ref: '#/components/parameters/Name'
+    get:
+      operationId: getSenderDomain
+      description: Scope domains:write.
+      responses:
+        '200':
+          description: Domain DNS configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainDNS'
+        '404':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+  /v1/domains/{name}/verify:
+    parameters:
+    - $ref: '#/components/parameters/Name'
+    post:
+      operationId: verifySenderDomain
+      description: Scope domains:write. Checks the ownership TXT and exact DKIM public
+        key.
+      responses:
+        '200':
+          description: Verified domain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainDNS'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+  /v1/templates/{name}:
+    parameters:
+    - $ref: '#/components/parameters/Name'
+    put:
+      operationId: putTemplate
+      description: Scope templates:write. Allocates an immutable version; templates
+        use Go text/template and html/template with missingkey=error.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Template'
+      responses:
+        '201':
+          description: New template version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '422':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '400': *id001
+  /v1/suppressions:
+    post:
+      operationId: suppressRecipient
+      description: Scope suppressions:write. Suppressions affect only the authenticated
+        project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - recipient
+              properties:
+                recipient:
+                  type: string
+                  format: email
+                reason:
+                  type: string
+                  maxLength: 256
+      responses:
+        '204':
+          description: Suppressed
+        '422':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '400': *id001
+  /v1/suppressions/{recipient}:
+    parameters:
+    - in: path
+      name: recipient
+      required: true
+      schema:
+        type: string
+    delete:
+      operationId: unsuppressRecipient
+      description: Scope suppressions:write. Operator should first investigate the
+        original failure.
+      responses:
+        '204':
+          description: Suppression removed
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+  /v1/webhooks:
+    post:
+      operationId: createWebhook
+      description: Scope webhooks:write. HTTPS required in production. Secret is returned
+        once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - url
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  maxLength: 2048
+      responses:
+        '201':
+          description: Endpoint and signing secret
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                - url
+                - secret
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  url:
+                    type: string
+                    format: uri
+                  secret:
+                    type: string
+        '422':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '400': *id001
+  /v1/webhooks/{id}:
+    parameters:
+    - $ref: '#/components/parameters/ID'
+    delete:
+      operationId: disableWebhook
+      description: Scope webhooks:write.
+      responses:
+        '204':
+          description: Disabled
+        '404':
+          $ref: '#/components/responses/Error'
+        '401': *id001
+        '403': *id001
+        '500': *id001
+        '503': *id001
+        '422': *id001
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-api-key
+  parameters:
+    ID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Name:
+      in: path
+      name: name
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Structured error; 503 may include Retry-After
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+            - error
+            properties:
+              error:
+                type: string
+  schemas:
+    SendRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - from
+      - to
+      properties:
+        from:
+          type: string
+          format: email
+          maxLength: 320
+        from_name:
+          type: string
+          maxLength: 200
+          x-maxBytes: 200
+        to:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            format: email
+        reply_to:
+          type: string
+          format: email
+        subject:
+          type: string
+          maxLength: 998
+          x-maxBytes: 998
+        text:
+          type: string
+        html:
+          type: string
+        template:
+          type: string
+        variables:
+          type: object
+          additionalProperties: true
+          x-maxJSONBytes: 262144
+          description: 'JSON only; depth 16, 10000 nodes. Rendering: 500 ms, 50000
+            operations and 10000 total iterations.'
+        attachments:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - filename
+            - data
+            properties:
+              filename:
+                type: string
+                minLength: 1
+                maxLength: 255
+                x-maxBytes: 255
+              content_type:
+                type: string
+                maxLength: 255
+                x-maxBytes: 255
+              data:
+                type: string
+                contentEncoding: base64
+        priority:
+          type: string
+          enum:
+          - critical
+          - normal
+          - bulk
+          default: normal
+        send_at:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+          default: 86400
+          description: Maximum age before starting submission to Postfix; Postfix
+            has its own queue lifetime.
+        metadata:
+          type: object
+          maxProperties: 20
+          propertyNames:
+            type: string
+            maxLength: 64
+            x-maxBytes: 64
+          additionalProperties:
+            type: string
+            maxLength: 256
+            x-maxBytes: 256
+    SendResult:
+      type: object
+      required:
+      - batch_id
+      - message_ids
+      - replayed
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        message_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        replayed:
+          type: boolean
+    Message:
+      type: object
+      required:
+      - id
+      - tenant_id
+      - batch_id
+      - from
+      - recipient
+      - priority
+      - status
+      - attempt_count
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        batch_id:
+          type: string
+          format: uuid
+        from:
+          type: string
+        recipient:
+          type: string
+        priority:
+          type: string
+          enum:
+          - critical
+          - normal
+          - bulk
+        status:
+          type: string
+          enum:
+          - queued
+          - dispatching
+          - submission_unknown
+          - submitted
+          - deferred
+          - delivered
+          - bounced
+          - failed
+          - canceled
+          - suppressed
+        attempt_count:
+          type: integer
+        last_error:
+          type: string
+        queue_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Event:
+      type: object
+      required:
+      - id
+      - message_id
+      - sequence
+      - type
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        type:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+    Template:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        subject:
+          type: string
+        text:
+          type: string
+        html:
+          type: string
+        version:
+          type: integer
+          readOnly: true
+    DomainDNS:
+      type: object
+      required:
+      - domain
+      - dns
+      properties:
+        domain:
+          type: object
+          required:
+          - id
+          - name
+          - selector
+          - dkim_public_key
+          - verified
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            selector:
+              type: string
+            verification_token:
+              type: string
+            dkim_public_key:
+              type: string
+            verified:
+              type: boolean
+        dns:
+          type: array
+          items:
+            type: object
+            required:
+            - type
+            - name
+            - value
+            properties:
+              type:
+                type: string
+              name:
+                type: string
+              value:
+                type: string

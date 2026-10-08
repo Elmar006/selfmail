@@ -1,0 +1,260 @@
+name: selfmail
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: '10m', max-file: '3'}
+
+x-env: &env
+  APP_ENV: ${APP_ENV:-development}
+  MASTER_KEY: ${MASTER_KEY:?run scripts/init-local first}
+  DATABASE_URL: postgres://mail_worker:${WORKER_DB_PASSWORD:?required}@postgres:5432/selfmail?sslmode=disable
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-selfmail}:${RABBITMQ_PASSWORD:?required}@rabbitmq:5672/
+  REDIS_URL: redis://:${REDIS_PASSWORD:?required}@redis:6379/0
+  SMTP_HOSTNAME: ${SMTP_HOSTNAME:-mail.example.test}
+  BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounce.example.test}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:18080}
+  ALLOW_PLAIN_SMTP: ${ALLOW_PLAIN_SMTP:-false}
+  ALLOW_UNVERIFIED_DOMAINS: ${ALLOW_UNVERIFIED_DOMAINS:-false}
+  ALLOW_PRIVATE_WEBHOOKS: ${ALLOW_PRIVATE_WEBHOOKS:-false}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+  POSTFIX_ADDR: postfix:25
+  MTA_NODE_ID: mta-1
+  CONTROL_DIR: /var/lib/selfmail/control
+  JOURNAL_DIR: /var/lib/selfmail/journal
+  JOURNAL_MAX_BYTES: ${JOURNAL_MAX_BYTES:-10737418240}
+  MAX_WIRE_BYTES: ${MAX_WIRE_BYTES:-10485760}
+  GOMEMLIMIT: 96MiB
+
+x-app: &app
+  image: selfmail:local
+  build: {context: ., target: runtime}
+  environment: *env
+  restart: unless-stopped
+  init: true
+  mem_limit: 128m
+  cpus: 0.25
+  pids_limit: 128
+  logging: *logging
+  stop_grace_period: 45s
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  networks: [core]
+  volumes: [runtime_control:/var/lib/selfmail/control, runtime_journal:/var/lib/selfmail/journal]
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+    redis: {condition: service_healthy}
+    rabbitmq: {condition: service_healthy}
+    initialize: {condition: service_completed_successfully}
+
+services:
+  storage-init:
+    image: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+    command: [sh, -c, 'mkdir -p /control /journal && chown 10001:10001 /control /journal && chmod 700 /control /journal']
+    volumes: [runtime_control:/control, runtime_journal:/journal]
+    network_mode: none
+  initialize:
+    <<: *app
+    command: [initialize]
+    restart: 'no'
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
+  postgres:
+    image: selfmail-postgres:local
+    build: {context: ./deploy/postgres}
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=120, -c, work_mem=4MB]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: selfmail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?required}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:?required}
+    volumes: [postgres_data:/var/lib/postgresql, ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/01-mail.sh:ro]
+    shm_size: 256mb
+    healthcheck: {test: [CMD-SHELL, 'pg_isready -U postgres -d selfmail'], interval: 5s, timeout: 3s, retries: 20}
+    networks: [core]
+    restart: unless-stopped
+  redis:
+    image: redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 64
+    logging: *logging
+    command: [redis-server, --appendonly, 'yes', --appendfsync, everysec, --maxmemory, 128mb, --maxmemory-policy, noeviction, --requirepass, '${REDIS_PASSWORD:?required}']
+    environment: {REDISCLI_AUTH: '${REDIS_PASSWORD:?required}'}
+    volumes: [redis_data:/data]
+    healthcheck: {test: [CMD, redis-cli, ping], interval: 5s, timeout: 3s, retries: 20}
+    networks: [core]
+    restart: unless-stopped
+  rabbitmq:
+    image: rabbitmq:4.3-management-alpine@sha256:3ef7f7e89fed709a78f79b8b5f4e30e1312a1d4089da752e23595566d9d61a95
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 512
+    logging: *logging
+    hostname: selfmail-rabbit
+    environment: {RABBITMQ_DEFAULT_USER: '${RABBITMQ_USER:-selfmail}', RABBITMQ_DEFAULT_PASS: '${RABBITMQ_PASSWORD:?required}', RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: '+S 2:2'}
+    volumes: [rabbit_data:/var/lib/rabbitmq]
+    ports: ['127.0.0.1:15673:15672']
+    healthcheck: {test: [CMD, rabbitmq-diagnostics, -q, ping], interval: 10s, timeout: 5s, retries: 20}
+    networks: [core]
+    restart: unless-stopped
+  migrate:
+    image: selfmail:local
+    build: {context: ., target: runtime}
+    command: [migrate]
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?required}@postgres:5432/selfmail?sslmode=disable
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [core]
+  api:
+    <<: *app
+    command: [api]
+    mem_limit: 256m
+    cpus: 0.5
+    networks: [core, outbound]
+    environment:
+      <<: *env
+      GOMEMLIMIT: 192MiB
+      DATABASE_URL: postgres://mail_app:${APP_DB_PASSWORD:?required}@postgres:5432/selfmail?sslmode=disable
+      SMTP_TLS_CERT: ${SMTP_TLS_CERT:-}
+      SMTP_TLS_KEY: ${SMTP_TLS_KEY:-}
+    volumes: [./secrets:/secrets:ro, runtime_control:/var/lib/selfmail/control, runtime_journal:/var/lib/selfmail/journal]
+    ports: ['127.0.0.1:18080:8080', '127.0.0.1:1587:1587']
+    healthcheck: {test: [CMD, selfmail, health], interval: 10s, timeout: 3s, start_period: 10s, retries: 10}
+  dispatcher:
+    <<: *app
+    command: [dispatcher]
+  maintainer:
+    <<: *app
+    command: [maintainer]
+  worker:
+    <<: *app
+    command: [worker]
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      <<: *env
+      GOMEMLIMIT: 384MiB
+    networks:
+      core:
+      mta: {ipv4_address: '${MTA_WORKER_IP:-10.233.179.2}'}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      postfix: {condition: service_healthy}
+      initialize: {condition: service_completed_successfully}
+  reconciler:
+    <<: *app
+    command: [reconciler]
+    mem_limit: 256m
+    cpus: 0.5
+    environment:
+      <<: *env
+      GOMEMLIMIT: 192MiB
+    volumes: [postfix_logs:/var/log/postfix, runtime_control:/var/lib/selfmail/control, runtime_journal:/var/lib/selfmail/journal]
+  webhooks:
+    <<: *app
+    command: [webhooks]
+    networks: [core, outbound]
+  bounce:
+    <<: *app
+    command: [bounce]
+    networks: [core, mta]
+  postfix:
+    build: {context: deploy/postfix}
+    image: selfmail-postfix:local
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    init: true
+    logging: *logging
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SMTP_HOSTNAME: ${SMTP_HOSTNAME:-mail.example.test}
+      BOUNCE_DOMAIN: ${BOUNCE_DOMAIN:-bounce.example.test}
+      TRUSTED_WORKERS: '${MTA_WORKER_IP:-10.233.179.2}/32'
+      POSTFIX_TLS_CERT: ${SMTP_TLS_CERT:-}
+      POSTFIX_TLS_KEY: ${SMTP_TLS_KEY:-}
+    volumes: [postfix_spool:/var/spool/postfix, postfix_logs:/var/log/postfix, ./secrets:/secrets:ro]
+    networks:
+      mta: {ipv4_address: '${MTA_POSTFIX_IP:-10.233.179.3}'}
+      outbound:
+    restart: unless-stopped
+    stop_grace_period: 45s
+  sink:
+    <<: *app
+    command: [sink]
+    profiles: [development, test]
+    environment: {}
+    volumes: !reset []
+    depends_on: {}
+    networks: [mta, core]
+    ports: ['127.0.0.1:18025:8025']
+  prometheus:
+    image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
+    command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus, --storage.tsdb.retention.time=7d, --storage.tsdb.retention.size=512MB]
+    profiles: [observability]
+    volumes: [./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro, ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro, prometheus_data:/prometheus]
+    ports: ['127.0.0.1:19090:9090']
+    networks: [core]
+  alertmanager:
+    image: prom/alertmanager:v0.31.1@sha256:88b605de9aba0410775c1eb3438f951115054e0d307f23f274a4c705f51630c1
+    profiles: [observability]
+    command: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    logging: *logging
+    volumes: [./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro, alertmanager_data:/alertmanager]
+    networks: [core]
+  tests:
+    build: {context: ., target: test}
+    image: selfmail-tests:local
+    profiles: [test]
+    environment:
+      <<: *env
+      TEST_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?required}@postgres:5432/selfmail_test?sslmode=disable
+      TEST_APP_DATABASE_URL: postgres://mail_app:${APP_DB_PASSWORD:?required}@postgres:5432/selfmail_test?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    networks: [core, outbound]
+  acceptance:
+    build: {context: ., target: test}
+    image: selfmail-tests:local
+    profiles: [test]
+    command: [go, run, ./cmd/acceptance]
+    environment:
+      <<: *env
+      ACCEPTANCE_API_URL: http://api:8080
+      ACCEPTANCE_SINK_URL: http://sink:8025
+    depends_on: {api: {condition: service_healthy}, sink: {condition: service_started}, worker: {condition: service_started}, reconciler: {condition: service_started}, webhooks: {condition: service_started}}
+    networks: [core, mta]
+
+networks:
+  core: {internal: true}
+  mta: {internal: true, ipam: {config: [{subnet: '${MTA_SUBNET:-10.233.179.0/28}', ip_range: '${MTA_DYNAMIC_RANGE:-10.233.179.8/29}'}]}}
+  outbound: {}
+volumes:
+  runtime_control:
+  runtime_journal:
+  postgres_data:
+  redis_data:
+  rabbit_data:
+  postfix_spool:
+  postfix_logs:
+  prometheus_data:
+  alertmanager_data:

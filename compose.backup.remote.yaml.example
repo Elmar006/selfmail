@@ -1,0 +1,17 @@
+# Copy to an ignored deployment override. The remote Unix account, SSH keys,
+# known_hosts and pgBackRest version must be provisioned before enabling this.
+services:
+  postgres:
+    environment:
+      PGBACKREST_REPO1_HOST: backup.internal.example
+      PGBACKREST_REPO1_HOST_USER: pgbackrest
+      PGBACKREST_REPO1_HOST_CONFIG: /etc/pgbackrest/pgbackrest.conf
+    volumes: ['./secrets/backup_ssh:/var/lib/postgresql/.ssh:ro']
+    networks: [core, outbound]
+  backup:
+    environment:
+      PGBACKREST_REPO1_HOST: backup.internal.example
+      PGBACKREST_REPO1_HOST_USER: pgbackrest
+      PGBACKREST_REPO1_HOST_CONFIG: /etc/pgbackrest/pgbackrest.conf
+    volumes: ['./secrets/backup_ssh:/var/lib/postgresql/.ssh:ro']
+    networks: [core, outbound]

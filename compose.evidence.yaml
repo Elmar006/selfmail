@@ -1,0 +1,51 @@
+# Run export first, then the encrypted repository snapshot. Configure a self-hosted
+# SFTP repository and known_hosts in production; the default is a local drill.
+services:
+  evidence-init:
+    image: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+    command: [sh, -c, 'test -s /source.env && test -s /pg-secrets/backup_passphrase && mkdir -p /evidence /credentials && cp /source.env /credentials/deployment.env && cp /pg-secrets/backup_passphrase /credentials/backup_passphrase && chown -R 10001:10001 /credentials && chmod 700 /credentials && chmod 600 /credentials/* && chown 10001:10001 /evidence && chmod 700 /evidence']
+    volumes: [evidence_staging:/evidence, 'evidence_credentials:/credentials', '${SELFMAIL_ENV_FILE:?set the actual deployment env file}:/source.env:ro', 'backup_credentials:/pg-secrets:ro']
+    depends_on: {backup-secrets-init: {condition: service_completed_successfully}}
+    network_mode: none
+  evidence-export:
+    image: selfmail:local
+    build: {context: ., target: runtime}
+    command: [evidence, export, --directory, /evidence, --env-file, /private/deployment.env, --secrets-directory, /private]
+    user: '10001:10001'
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      MASTER_KEY: ${MASTER_KEY:?required}
+      DATABASE_URL: postgres://mail_worker:${WORKER_DB_PASSWORD:?required}@postgres:5432/selfmail?sslmode=disable
+      CONTROL_DIR: /var/lib/selfmail/control
+      JOURNAL_DIR: /var/lib/selfmail/journal
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:18080}
+    volumes:
+      - runtime_control:/var/lib/selfmail/control
+      - runtime_journal:/var/lib/selfmail/journal
+      - evidence_staging:/evidence
+      - evidence_credentials:/private:ro
+    depends_on: {evidence-init: {condition: service_completed_successfully}, postgres: {condition: service_healthy}}
+    networks: [core]
+  evidence-repository:
+    image: restic/restic:0.18.1@sha256:39d9072fb5651c80d75c7a811612eb60b4c06b32ffe87c2e9f3c7222e1797e76
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    environment:
+      RESTIC_REPOSITORY: ${EVIDENCE_REPOSITORY:-/repository}
+      RESTIC_PASSWORD_FILE: /run/secrets/evidence_passphrase
+    volumes:
+      - evidence_staging:/evidence:ro
+      - evidence_repo:/repository
+      - ./secrets/evidence_passphrase:/run/secrets/evidence_passphrase:ro
+      - ./secrets/backup_ssh:/root/.ssh:ro
+    networks: [outbound]
+    command: [snapshots]
+volumes:
+  evidence_staging:
+  evidence_repo:
+  evidence_credentials:
+  backup_credentials:

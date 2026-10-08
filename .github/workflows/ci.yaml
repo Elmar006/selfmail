@@ -1,0 +1,27 @@
+name: selfmail
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - run: docker run --rm -v "$PWD:/src:ro" ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git /src --log-opts=HEAD --redact=100 --no-banner
+      - run: sh scripts/init-local.sh
+      - run: docker compose up -d --build --wait
+      - run: docker compose --profile test build tests
+      - run: docker compose --profile test run --rm tests sh scripts/verify.sh
+      - run: python3 -m pip install PyYAML==6.0.3 && python3 scripts/check-api-contract.py
+      - run: docker run --rm -v "$PWD/deploy/prometheus:/rules:ro" -w /rules --entrypoint promtool prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e test rules rules.test.yml
+      - run: docker compose --profile test run --rm acceptance
+      - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 selfmail:local
+      - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 selfmail-postfix:local
+      - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 selfmail-postgres:local
+      - if: failure()
+        run: docker compose logs --tail 200 api worker dispatcher reconciler postfix bounce
+      - if: always()
+        run: docker compose down

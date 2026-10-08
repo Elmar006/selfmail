@@ -1,0 +1,73 @@
+groups:
+  - name: selfmail
+    rules:
+      - alert: SelfmailSubmissionUnknown
+        expr: selfmail_messages{status="submission_unknown"} > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'SMTP handoff outcome needs reconciliation'}
+      - alert: SelfmailOutboxStalled
+        expr: selfmail_outbox_oldest_seconds > 120
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: 'Ready jobs are not being published'}
+      - alert: SelfmailWebhookExhausted
+        expr: selfmail_webhooks_dead > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Webhook retries exhausted'}
+      - alert: SelfmailDatabaseUnavailable
+        expr: selfmail_database_scrape_success == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Delivery state cannot be read'}
+      - alert: SelfmailProcessUnavailable
+        expr: up{job="selfmail"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'A selfmail process cannot be scraped'}
+      - alert: SelfmailConsumersUnavailable
+        expr: (sum(selfmail_broker_consumers) or vector(0)) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'No connected delivery consumers'}
+      - alert: SelfmailProgressStopped
+        expr: time() - selfmail_success_timestamp_seconds{component=~"dispatcher|watchdog|statistics|reconciler|webhooks"} > 120
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'A delivery component stopped making progress'}
+      - alert: SelfmailReadyQueueStalled
+        expr: selfmail_queued_oldest_seconds > 120
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: 'Ready messages are not reaching Postfix'}
+      - alert: SelfmailStatisticsDelayed
+        expr: selfmail_statistics_lag_seconds > 60
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Message counters have fallen behind'}
+      - alert: SelfmailReconciliationStalled
+        expr: selfmail_mta_pending_oldest_seconds > 120 and selfmail_mta_log_age_seconds > 120
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: 'Pending MTA delivery has no recent log ingestion'}
+      - alert: SelfmailRecoveryHold
+        expr: selfmail_recovery_hold > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Recovery fence disables acceptance and handoff'}
+      - alert: SelfmailWALArchiveFailed
+        expr: increase(selfmail_wal_archive_failures[5m]) > 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'PostgreSQL WAL archiving has failed'}
+      - alert: SelfmailSpoolDiskLow
+        expr: selfmail_postfix_spool{measurement="disk_available"} < 1073741824
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: 'Postfix filesystem has less than 1 GiB available'}
+      - alert: SelfmailSpoolGrowing
+        expr: selfmail_postfix_spool{measurement="bytes"} > 1073741824
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Postfix spool exceeded 1 GiB'}

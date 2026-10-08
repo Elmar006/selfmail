@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+bin/
+coverage.out
+data/
+secrets/
+*.log
+.audit/
+docs/audit/
+.verification/

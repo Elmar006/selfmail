@@ -1,0 +1,14 @@
+global:
+  resolve_timeout: 1m
+route:
+  receiver: local-drill
+  group_by: [alertname]
+  group_wait: 5s
+  group_interval: 15s
+  repeat_interval: 1h
+receivers:
+  - name: local-drill
+    webhook_configs:
+      - url: http://sink:8025/alerts
+        send_resolved: true
+# Replace this receiver URL with an operator-owned incident endpoint in production.

@@ -1,0 +1,40 @@
+# Opt-in encrypted WAL/physical backups. This local repository is a drill setup;
+# use compose.backup.remote.yaml.example for an independent SSH repository host.
+services:
+  backup-secrets-init:
+    image: alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+    command: [sh, -c, 'test -s /source-passphrase && cp /source-passphrase /credentials/backup_passphrase.tmp && chown 999:999 /credentials/backup_passphrase.tmp && chmod 600 /credentials/backup_passphrase.tmp && mv /credentials/backup_passphrase.tmp /credentials/backup_passphrase && chown 999:999 /credentials && chmod 700 /credentials']
+    volumes: ['./secrets/backup_passphrase:/source-passphrase:ro', 'backup_credentials:/credentials']
+    network_mode: none
+  postgres:
+    image: selfmail-postgres:local
+    build: {context: ./deploy/postgres}
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=120, -c, work_mem=4MB, -c, archive_mode=on, -c, 'archive_command=selfmail-pgbackrest archive-push %p', -c, archive_timeout=60s, -c, max_wal_size=1GB]
+    volumes:
+      - postgres_socket:/var/run/postgresql
+      - backup_repo:/var/lib/pgbackrest
+      - backup_credentials:/run/secrets:ro
+    depends_on: {backup-secrets-init: {condition: service_completed_successfully}}
+  backup:
+    image: selfmail-postgres:local
+    build: {context: ./deploy/postgres}
+    user: postgres
+    entrypoint: [selfmail-backup-loop]
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: {driver: json-file, options: {max-size: '10m', max-file: '3'}}
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - postgres_data:/var/lib/postgresql:ro
+      - postgres_socket:/var/run/postgresql
+      - backup_repo:/var/lib/pgbackrest
+      - backup_credentials:/run/secrets:ro
+    depends_on: {postgres: {condition: service_healthy}, backup-secrets-init: {condition: service_completed_successfully}}
+    networks: [core]
+volumes:
+  postgres_socket:
+  backup_repo:
+  backup_credentials:

@@ -1,0 +1,9 @@
+.git
+.env*
+secrets
+data
+bin
+coverage.out
+.audit
+.verification
+docs/audit

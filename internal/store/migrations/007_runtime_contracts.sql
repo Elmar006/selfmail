@@ -1,0 +1,51 @@
+CREATE TABLE crypto_guard(id boolean PRIMARY KEY DEFAULT true CHECK(id),check_cipher bytea NOT NULL);
+GRANT SELECT ON crypto_guard TO mail_app,mail_worker;
+GRANT INSERT,UPDATE ON crypto_guard TO mail_worker;
+ALTER TABLE batches ADD COLUMN idempotency_digest text;
+UPDATE batches SET idempotency_digest=encode(sha256(convert_to(idempotency_key,'UTF8')),'hex');
+ALTER TABLE batches ALTER COLUMN idempotency_digest SET NOT NULL;
+CREATE UNIQUE INDEX batches_idempotency_digest ON batches(tenant_id,idempotency_digest);
+ALTER TABLE batches ADD COLUMN response jsonb;
+UPDATE batches b SET response=jsonb_build_object('batch_id',b.id::text,'message_ids',COALESCE((SELECT jsonb_agg(m.id::text ORDER BY m.recipient) FROM messages m WHERE m.batch_id=b.id),'[]'::jsonb),'replayed',false);
+ALTER TABLE batches ADD COLUMN payload_expired_at timestamptz;
+ALTER TABLE tenants ADD COLUMN stored_bytes bigint NOT NULL DEFAULT 0 CHECK(stored_bytes>=0);
+ALTER TABLE batch_payloads ADD COLUMN storage_bytes bigint NOT NULL DEFAULT 0;
+UPDATE batch_payloads SET storage_bytes=pg_column_size(payload)::bigint+COALESCE(octet_length(raw_mime),0);
+UPDATE tenants t SET stored_bytes=COALESCE((SELECT sum(storage_bytes) FROM batch_payloads p WHERE p.tenant_id=t.id),0);
+CREATE FUNCTION track_payload_storage() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
+BEGIN
+ IF TG_OP='INSERT' THEN NEW.storage_bytes:=pg_column_size(NEW.payload)::bigint+COALESCE(octet_length(NEW.raw_mime),0);UPDATE public.tenants SET stored_bytes=stored_bytes+NEW.storage_bytes WHERE id=NEW.tenant_id;RETURN NEW;
+ ELSIF TG_OP='DELETE' THEN UPDATE public.tenants SET stored_bytes=stored_bytes-OLD.storage_bytes WHERE id=OLD.tenant_id;RETURN OLD;
+ ELSE RAISE EXCEPTION 'payloads are immutable'; END IF;
+END $$;
+CREATE TRIGGER payload_storage BEFORE INSERT OR UPDATE OR DELETE ON batch_payloads FOR EACH ROW EXECUTE FUNCTION track_payload_storage();
+ALTER TABLE messages ADD COLUMN next_event_sequence bigint NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN sequence bigint;
+WITH numbered AS (SELECT id,row_number() OVER(PARTITION BY message_id ORDER BY created_at,id) n FROM events) UPDATE events e SET sequence=n.n FROM numbered n WHERE e.id=n.id;
+UPDATE messages m SET next_event_sequence=COALESCE((SELECT max(sequence) FROM events e WHERE e.message_id=m.id),0);
+ALTER TABLE events ALTER COLUMN sequence SET NOT NULL;
+CREATE UNIQUE INDEX events_sequence ON events(tenant_id,message_id,sequence);
+ALTER TABLE webhook_jobs ADD COLUMN resolved_at timestamptz;
+CREATE INDEX messages_due ON messages(next_attempt_at,id) WHERE status='queued';
+CREATE INDEX messages_active_tenant ON messages(tenant_id,status) WHERE status IN ('queued','dispatching','submission_unknown','submitted','deferred');
+CREATE INDEX outbox_message_pending ON outbox(message_id) WHERE published_at IS NULL;
+CREATE INDEX outbox_message_published ON outbox(message_id,published_at DESC) WHERE published_at IS NOT NULL;
+CREATE INDEX messages_retention ON messages(updated_at,id) WHERE status IN ('delivered','bounced','failed','canceled','suppressed');
+CREATE INDEX webhook_event ON webhook_jobs(event_id,status);
+CREATE TABLE statistics_deltas(id bigserial PRIMARY KEY,status text NOT NULL,shard integer NOT NULL,delta integer NOT NULL CHECK(delta IN (-1,1)),created_at timestamptz NOT NULL DEFAULT clock_timestamp());
+CREATE TABLE statistics_stock(status text NOT NULL,shard integer NOT NULL,count bigint NOT NULL DEFAULT 0 CHECK(count>=0),PRIMARY KEY(status,shard));
+CREATE TABLE statistics_checkpoint(id boolean PRIMARY KEY DEFAULT true CHECK(id),updated_at timestamptz NOT NULL);
+INSERT INTO statistics_checkpoint VALUES(true,clock_timestamp());
+INSERT INTO statistics_stock SELECT status,mod(abs(hashtext(id::text)::bigint),32)::int,count(*) FROM messages GROUP BY status,mod(abs(hashtext(id::text)::bigint),32)::int;
+CREATE FUNCTION emit_statistics_delta() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
+DECLARE shard integer;
+BEGIN
+ IF TG_OP='UPDATE' AND NEW.status=OLD.status THEN RETURN NEW; END IF;
+ IF TG_OP<>'INSERT' THEN shard:=mod(abs(hashtext(OLD.id::text)::bigint),32)::int;INSERT INTO public.statistics_deltas(status,shard,delta) VALUES(OLD.status,shard,-1);END IF;
+ IF TG_OP<>'DELETE' THEN shard:=mod(abs(hashtext(NEW.id::text)::bigint),32)::int;INSERT INTO public.statistics_deltas(status,shard,delta) VALUES(NEW.status,shard,1);RETURN NEW;END IF;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER message_statistics AFTER INSERT OR UPDATE OF status OR DELETE ON messages FOR EACH ROW EXECUTE FUNCTION emit_statistics_delta();
+REVOKE ALL ON FUNCTION track_payload_storage(),emit_statistics_delta() FROM PUBLIC;
+GRANT SELECT,INSERT,UPDATE,DELETE ON statistics_deltas,statistics_stock,statistics_checkpoint TO mail_worker;
+GRANT USAGE,SELECT ON SEQUENCE statistics_deltas_id_seq TO mail_worker;
