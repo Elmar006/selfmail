@@ -20,11 +20,20 @@ func (s *Store) recordOutcome(m domain.Message, status, queue, diagnostic string
 	}
 	return s.Journal.Put(journal.Record{ID: journal.ID("outcome", m.AttemptID, status, queue, diagnostic), Kind: "outcome", Tenant: m.TenantID, Message: m.ID, Attempt: m.AttemptID, Node: m.NodeID, Queue: queue, Status: status, Diagnostic: diagnostic})
 }
-func (s *Store) recordLog(node, file string, offset, next int64, queue, message, attempt, status, recipient, dsn, diagnostic string) error {
+func (s *Store) recordLogs(node, file string, lines []LogLine) error {
 	if s.Journal == nil {
 		return nil
 	}
-	return s.Journal.Put(journal.Record{ID: journal.ID("log", node, file, strconv.FormatInt(offset, 10)), Kind: "log", Node: node, File: file, Offset: offset, Next: next, Queue: queue, Message: message, Attempt: attempt, Status: status, Recipient: recipient, DSN: dsn, Diagnostic: diagnostic})
+	var records []journal.Record
+	for _, line := range lines {
+		if line.Parsed {
+			records = append(records, journal.Record{ID: journal.ID("log", node, file, strconv.FormatInt(line.Offset, 10)), Kind: "log", Node: node, File: file, Offset: line.Offset, Next: line.Next, Queue: line.QueueID, Message: line.MessageID, Attempt: line.AttemptID, Status: line.Status, Recipient: line.Recipient, DSN: line.DSN, Diagnostic: line.Diagnostic})
+		}
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	return s.Journal.PutMany(records)
 }
 func (s *Store) CheckJournal(ctx context.Context) error {
 	if s.Journal == nil {

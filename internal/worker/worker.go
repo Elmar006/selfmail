@@ -47,7 +47,7 @@ type Worker struct {
 }
 
 func (w *Worker) Handle(ctx context.Context, job domain.Job) error {
-	ctx, release, e := w.Budget.Acquire(ctx)
+	ctx, release, e := w.Budget.AcquireWait(ctx)
 	if e != nil {
 		return e
 	}
@@ -163,14 +163,14 @@ func RunDispatcher(ctx context.Context, s *store.Store, url string) error {
 		}
 		for ctx.Err() == nil {
 			op, cancel := context.WithTimeout(ctx, 8*time.Second)
-			did, e := s.PublishOne(op, b)
+			n, e := s.PublishBatch(op, b, 32)
 			telemetry.Progress("dispatcher", e)
 			cancel()
 			if e != nil {
 				slog.Warn("outbox publish will retry", "error", e)
 				break
 			}
-			if !did && !pause(ctx, 250*time.Millisecond) {
+			if n == 0 && !pause(ctx, 250*time.Millisecond) {
 				break
 			}
 		}

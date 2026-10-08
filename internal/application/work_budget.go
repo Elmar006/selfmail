@@ -29,3 +29,24 @@ func (b *WorkBudget) Acquire(ctx context.Context) (context.Context, func(), erro
 		return ctx, nil, domain.ErrUnavailable
 	}
 }
+
+// AcquireWait is used by consumers with bounded prefetch. A busy slot applies
+// backpressure without requeueing a valid job or consuming its delivery limit.
+func (b *WorkBudget) AcquireWait(ctx context.Context) (context.Context, func(), error) {
+	if e := ctx.Err(); e != nil {
+		return ctx, nil, e
+	}
+	if b == nil || ctx.Value(budgetKey{}) == b {
+		return ctx, func() {}, nil
+	}
+	select {
+	case b.slots <- struct{}{}:
+		if e := ctx.Err(); e != nil {
+			<-b.slots
+			return ctx, nil, e
+		}
+		return context.WithValue(ctx, budgetKey{}, b), func() { <-b.slots }, nil
+	case <-ctx.Done():
+		return ctx, nil, ctx.Err()
+	}
+}

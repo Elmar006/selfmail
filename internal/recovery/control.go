@@ -61,21 +61,45 @@ func LockFile(ctx context.Context, path string, exclusive bool) (*Permit, error)
 	if e != nil {
 		return nil, e
 	}
+	// Start promptly on short journal writes; back off on long recovery holds.
+	// A fixed 20ms poll left a freed manifest idle for most of each write.
+	delay := 250 * time.Microsecond
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
+		if e := ctx.Err(); e != nil {
+			f.Close()
+			return nil, e
+		}
 		ok, e := tryLock(f, exclusive)
 		if e != nil {
 			f.Close()
 			return nil, e
 		}
 		if ok {
+			if e := ctx.Err(); e != nil {
+				unlock(f)
+				f.Close()
+				return nil, e
+			}
 			return &Permit{file: f}, nil
+		}
+		if timer == nil {
+			timer = time.NewTimer(delay)
+		} else {
+			timer.Reset(delay)
 		}
 		select {
 		case <-ctx.Done():
 			f.Close()
 			return nil, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
+		case <-timer.C:
 		}
+		delay = min(delay*2, 4*time.Millisecond)
 	}
 }
 func (c *Controller) read() (s State, e error) {

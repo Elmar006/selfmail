@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/Elmar006/selfmail/internal/domain"
 	"github.com/Elmar006/selfmail/internal/journal"
@@ -22,16 +24,75 @@ func (s *Store) ArchiveComplete(ctx context.Context, node, file string) error {
 	return e
 }
 func (s *Store) ApplyLogLine(ctx context.Context, node, file string, offset, next int64, queue, message, attempt, status, recipient, dsn, diagnostic string, parsed bool) error {
-	if parsed {
-		if e := s.recordLog(node, file, offset, next, queue, message, attempt, status, recipient, dsn, diagnostic); e != nil {
-			return e
+	return s.ApplyLogLines(ctx, node, file, []LogLine{{Offset: offset, Next: next, QueueID: queue, MessageID: message, AttemptID: attempt, Status: status, Recipient: recipient, DSN: dsn, Diagnostic: diagnostic, Parsed: parsed}})
+}
+
+const MaxLogBatch = 32
+
+type LogLine struct {
+	Offset, Next                                                      int64
+	QueueID, MessageID, AttemptID, Status, Recipient, DSN, Diagnostic string
+	Parsed                                                            bool
+}
+
+// ApplyLogLines preserves independent journal records and log order, but pays
+// for one SQL commit and cursor update per bounded chunk. A failed transaction
+// advances no cursor and can be replayed without duplicating events.
+func (s *Store) ApplyLogLines(ctx context.Context, node, file string, lines []LogLine) error {
+	started := time.Now()
+	defer func() {
+		if s.Observe != nil {
+			s.Observe("reconciliation", time.Since(started))
 		}
+	}()
+	if len(lines) < 1 || len(lines) > MaxLogBatch {
+		return fmt.Errorf("log batch requires 1..%d lines", MaxLogBatch)
+	}
+	for i, line := range lines {
+		if line.Offset < 0 || line.Next <= line.Offset || (i > 0 && line.Offset != lines[i-1].Next) {
+			return fmt.Errorf("log batch offsets must be increasing and contiguous")
+		}
+	}
+	if e := s.recordLogs(node, file, lines); e != nil {
+		return e
 	}
 	tx, e := s.Pool.Begin(ctx)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback(ctx)
+	// Concurrent scanners of this node may read different archives. Serialize
+	// their receipt associations, then take all message locks in UUID order to
+	// match retention's order and avoid multi-message batch deadlocks.
+	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('selfmail:mta-log:'||$1::text,0))", node); e != nil {
+		return e
+	}
+	var messages, queues []string
+	for _, line := range lines {
+		if !line.Parsed {
+			continue
+		}
+		queues = append(queues, line.QueueID)
+		if domain.ValidID(line.MessageID) {
+			messages = append(messages, line.MessageID)
+		}
+	}
+	if _, e = tx.Exec(ctx, "SELECT id FROM messages WHERE id=ANY($1::uuid[]) OR id IN(SELECT message_id FROM mta_receipts WHERE node_id=$2 AND queue_id=ANY($3::text[])) ORDER BY id FOR UPDATE", messages, node, queues); e != nil {
+		return e
+	}
+	for _, line := range lines {
+		if e = applyLogLineTx(ctx, tx, node, file, line); e != nil {
+			return e
+		}
+	}
+	if _, e = tx.Exec(ctx, "INSERT INTO mta_log_cursors(node_id,file_id,offset_bytes) VALUES($1,$2,$3) ON CONFLICT(node_id,file_id) DO UPDATE SET offset_bytes=GREATEST(mta_log_cursors.offset_bytes,EXCLUDED.offset_bytes),updated_at=now()", node, file, lines[len(lines)-1].Next); e != nil {
+		return e
+	}
+	return tx.Commit(ctx)
+}
+
+func applyLogLineTx(ctx context.Context, tx pgx.Tx, node, file string, line LogLine) error {
+	offset, queue, message, attempt, status, recipient, dsn, diagnostic, parsed := line.Offset, line.QueueID, line.MessageID, line.AttemptID, line.Status, line.Recipient, line.DSN, line.Diagnostic, line.Parsed
 	tag, e := tx.Exec(ctx, "INSERT INTO mta_log_lines(node_id,file_id,offset_bytes) VALUES($1,$2,$3) ON CONFLICT DO NOTHING", node, file, offset)
 	if e != nil {
 		return e
@@ -65,10 +126,7 @@ func (s *Store) ApplyLogLine(ctx context.Context, node, file string, offset, nex
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, "INSERT INTO mta_log_cursors(node_id,file_id,offset_bytes) VALUES($1,$2,$3) ON CONFLICT(node_id,file_id) DO UPDATE SET offset_bytes=GREATEST(mta_log_cursors.offset_bytes,EXCLUDED.offset_bytes),updated_at=now()", node, file, next); e != nil {
-		return e
-	}
-	return tx.Commit(ctx)
+	return nil
 }
 func applyReceipt(ctx context.Context, tx pgx.Tx, node, queue string) error {
 	var mid, aid *string

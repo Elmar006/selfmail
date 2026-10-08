@@ -25,6 +25,7 @@ type Store struct {
 	Control        *recovery.Controller
 	Journal        *journal.Journal
 	MaxTenantBytes int64
+	Observe        func(string, time.Duration)
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {

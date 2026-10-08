@@ -147,6 +147,12 @@ type Job struct {
 	TenantID  string `json:"tenant_id"`
 }
 
+// Dispatch contains a small queue reference, never a message body or credential.
+type Dispatch struct {
+	Priority string
+	Job      Job
+}
+
 func Address(input string) (string, error) {
 	if len(input) > 320 || strings.ContainsAny(input, "\r\n\x00") {
 		return "", Invalid("address", "invalid address")

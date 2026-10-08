@@ -247,7 +247,11 @@ func (j *Journal) startPending(id string, sequence uint64) error {
 	if e != nil {
 		return e
 	}
-	b, e = j.vault.Seal(b, "selfmail:journal-pending:v1:"+j.instance)
+	return j.writePending(b)
+}
+
+func (j *Journal) writePending(plain []byte) error {
+	b, e := j.vault.Seal(plain, "selfmail:journal-pending:v1:"+j.instance)
 	if e != nil {
 		return e
 	}
@@ -285,7 +289,7 @@ func (j *Journal) finishPending() error {
 	return syncDirectory(j.root)
 }
 
-// RepairPending completes only the single authenticated interrupted operation.
+// RepairPending completes only the authenticated interrupted operation.
 // Missing committed history is never repaired by dropping evidence.
 func (j *Journal) RepairPending(ctx context.Context) error {
 	p, e := recovery.LockFile(ctx, filepath.Join(j.root, "manifest.lock"), true)
@@ -293,7 +297,7 @@ func (j *Journal) RepairPending(ctx context.Context) error {
 		return e
 	}
 	defer p.Close()
-	b, e := os.ReadFile(filepath.Join(j.root, "pending.enc"))
+	b, e := j.readPending()
 	if errors.Is(e, os.ErrNotExist) {
 		_, e = j.checkedHead()
 		return e
@@ -304,6 +308,20 @@ func (j *Journal) RepairPending(ctx context.Context) error {
 	b, e = j.vault.Open(b, "selfmail:journal-pending:v1:"+j.instance)
 	if e != nil {
 		return e
+	}
+	var format struct{ Version int }
+	if e = json.Unmarshal(b, &format); e != nil {
+		return e
+	}
+	if format.Version == 2 {
+		var batch pendingBatch
+		if e = json.Unmarshal(b, &batch); e != nil {
+			return e
+		}
+		return j.repairBatch(batch)
+	}
+	if format.Version != 0 {
+		return fmt.Errorf("unknown pending journal format")
 	}
 	var pending entry
 	if e = json.Unmarshal(b, &pending); e != nil {
@@ -398,6 +416,12 @@ func (j *Journal) appendEntry(h head, id string) error {
 	if e != nil {
 		return e
 	}
+	return j.appendCipherEntry(h, id, cipher)
+}
+
+// The record has been fsynced and linked before its manifest entry is appended.
+// Recovery reads it from disk; a normal writer can reuse the exact ciphertext.
+func (j *Journal) appendCipherEntry(h head, id string, cipher []byte) error {
 	r := entry{Sequence: h.Sequence + 1, ID: id, Checksum: security.Digest(string(cipher)), Previous: h.Hash}
 	b, e := json.Marshal(r)
 	if e != nil {

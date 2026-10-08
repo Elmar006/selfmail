@@ -72,7 +72,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 func Handler(s *store.Store, aggregate bool) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	reg.MustRegister(loops, successes, failures, consumers, outcomes, spool, spoolObserved)
+	reg.MustRegister(loops, successes, failures, consumers, outcomes, spool, spoolObserved, work)
 	if aggregate {
 		reg.MustRegister(&collector{s: s, statuses: prometheus.NewDesc("selfmail_messages", "Messages by delivery status", []string{"status"}, nil), outbox: prometheus.NewDesc("selfmail_outbox_pending", "Unpublished jobs", nil, nil), oldest: prometheus.NewDesc("selfmail_outbox_oldest_seconds", "Age of oldest ready unpublished job", nil, nil), dead: prometheus.NewDesc("selfmail_webhooks_dead", "Unresolved exhausted jobs", nil, nil), logAge: prometheus.NewDesc("selfmail_mta_log_age_seconds", "Age of log checkpoint", nil, nil), up: prometheus.NewDesc("selfmail_database_scrape_success", "DB metrics availability", nil, nil), statisticsAge: prometheus.NewDesc("selfmail_statistics_lag_seconds", "Age of oldest unapplied statistics delta", nil, nil), readyAge: prometheus.NewDesc("selfmail_queued_oldest_seconds", "Oldest ready message age", nil, nil), deferredAge: prometheus.NewDesc("selfmail_mta_pending_oldest_seconds", "Oldest submitted/deferred age", nil, nil), hold: prometheus.NewDesc("selfmail_recovery_hold", "Recovery fence active", nil, nil), archivedAge: prometheus.NewDesc("selfmail_wal_archive_age_seconds", "WAL archive age; -1 when never archived", nil, nil), archiveErrors: prometheus.NewDesc("selfmail_wal_archive_failures", "Cumulative archive errors", nil, nil)})
 	}

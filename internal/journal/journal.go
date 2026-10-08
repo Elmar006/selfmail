@@ -51,6 +51,8 @@ type Journal struct {
 	instance string
 	bound    bool
 	MaxBytes uint64
+	// Observe is configured before use; it reports bounded operation timings.
+	Observe func(string, time.Duration)
 }
 
 func (j *Journal) capacity() uint64 {
@@ -114,13 +116,23 @@ func syncDirectory(path string) error {
 	return f.Sync()
 }
 func (j *Journal) Put(r Record) error {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	p, e := recovery.LockFile(ctx, filepath.Join(j.root, "manifest.lock"), true)
+	if j.Observe != nil {
+		j.Observe("journal_lock_wait", time.Since(started))
+	}
 	if e != nil {
 		return e
 	}
-	defer p.Close()
+	locked := time.Now()
+	defer func() {
+		p.Close()
+		if j.Observe != nil {
+			j.Observe("journal_write", time.Since(locked))
+		}
+	}()
 	h, e := j.checkedHead()
 	if e != nil {
 		return e
@@ -164,10 +176,18 @@ func (j *Journal) Put(r Record) error {
 		return e
 	}
 	dir := filepath.Dir(path)
-	if e = os.MkdirAll(dir, 0700); e != nil {
-		return e
+	// Only a newly created shard changes the root directory. Existing shards
+	// were synced before their first committed record.
+	if e = os.Mkdir(dir, 0700); e == nil {
+		e = syncDirectory(j.root)
+	} else if errors.Is(e, os.ErrExist) {
+		var info os.FileInfo
+		info, e = os.Stat(dir)
+		if e == nil && !info.IsDir() {
+			e = fmt.Errorf("journal shard is not a directory")
+		}
 	}
-	if e = syncDirectory(j.root); e != nil {
+	if e != nil {
 		return e
 	}
 	f, e := os.CreateTemp(dir, ".record-")
@@ -197,7 +217,7 @@ func (j *Journal) Put(r Record) error {
 	if e = syncDirectory(dir); e != nil {
 		return e
 	}
-	if e = j.appendEntry(h, r.ID); e != nil {
+	if e = j.appendCipherEntry(h, r.ID, cipher); e != nil {
 		return e
 	}
 	return j.finishPending()

@@ -13,6 +13,8 @@ import (
 
 var Priorities = []string{"critical", "normal", "bulk"}
 
+const MaxPublishBatch = 64
+
 type Broker struct {
 	Conn     *amqp.Connection
 	Pub      *amqp.Channel
@@ -43,8 +45,8 @@ func OpenNamespace(raw, prefix string) (*Broker, error) {
 		b.Close()
 		return nil, e
 	}
-	b.Confirms = ch.NotifyPublish(make(chan amqp.Confirmation, 1))
-	b.Returns = ch.NotifyReturn(make(chan amqp.Return, 1))
+	b.Confirms = ch.NotifyPublish(make(chan amqp.Confirmation, MaxPublishBatch))
+	b.Returns = ch.NotifyReturn(make(chan amqp.Return, MaxPublishBatch))
 	return b, nil
 }
 func (b *Broker) Close() { b.Pub.Close(); b.Conn.Close() }
@@ -73,45 +75,77 @@ func (b *Broker) Topology() error {
 	return nil
 }
 
-// Publish is single-threaded. Confirm and mandatory return are both required.
+// Publish and PublishBatch share a single publisher channel and must be called
+// serially. Confirm and mandatory routing are both required.
 func (b *Broker) Publish(ctx context.Context, priority string, job domain.Job) error {
-	raw, e := json.Marshal(job)
-	if e != nil {
+	return b.PublishBatch(ctx, []domain.Dispatch{{Priority: priority, Job: job}})
+}
+
+// PublishBatch pipelines bounded persistent publications, then waits for every
+// confirm and mandatory return. On partial success the SQL outbox retries the
+// whole batch; message claims tolerate repeated queue references. A timeout or
+// channel failure requires discarding this connection before another batch.
+func (b *Broker) PublishBatch(ctx context.Context, jobs []domain.Dispatch) error {
+	if len(jobs) < 1 || len(jobs) > MaxPublishBatch {
+		return fmt.Errorf("publisher batch requires 1..%d jobs", MaxPublishBatch)
+	}
+	if e := ctx.Err(); e != nil {
 		return e
+	}
+	body := make([][]byte, len(jobs))
+	for i, item := range jobs {
+		var e error
+		if body[i], e = json.Marshal(item.Job); e != nil {
+			return e
+		}
 	}
 	seq := b.Pub.GetNextPublishSeqNo()
-	if e = b.Pub.PublishWithContext(ctx, b.Prefix+".dispatch", priority, true, false, amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, MessageId: job.MessageID, Timestamp: time.Now(), Body: raw}); e != nil {
-		return e
+	for i, item := range jobs {
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		if e := b.Pub.PublishWithContext(ctx, b.Prefix+".dispatch", item.Priority, true, false, amqp.Publishing{ContentType: "application/json", DeliveryMode: amqp.Persistent, MessageId: item.Job.MessageID, Timestamp: time.Now(), Body: body[i]}); e != nil {
+			return e
+		}
 	}
-	returned := false
-	for {
+	return waitConfirms(ctx, b.Confirms, b.Returns, seq, len(jobs))
+}
+
+func waitConfirms(ctx context.Context, confirms <-chan amqp.Confirmation, returns <-chan amqp.Return, first uint64, count int) error {
+	rejected := false
+	for confirmed := 0; confirmed < count; {
 		select {
-		case _, ok := <-b.Returns:
+		case _, ok := <-returns:
 			if !ok {
 				return errors.New("publisher return channel closed")
 			}
-			returned = true
-		case c, ok := <-b.Confirms:
+			rejected = true
+		case c, ok := <-confirms:
 			if !ok {
 				return errors.New("publisher confirm channel closed")
 			}
-			if c.DeliveryTag != seq {
+			if c.DeliveryTag != first+uint64(confirmed) {
 				return fmt.Errorf("publisher confirm sequence mismatch")
 			}
-			// Returns are sent before confirms, but Go selects among ready channels randomly.
-			select {
-			case _, ok := <-b.Returns:
-				if !ok {
-					return errors.New("publisher return channel closed")
-				}
-				returned = true
-			default:
-			}
-			if !c.Ack || returned {
-				return errors.New("broker rejected or could not route message")
-			}
-			return nil
+			rejected = rejected || !c.Ack
+			confirmed++
 		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// amqp091 delivers returns before their corresponding confirms, but select
+	// can choose a ready confirm first. Drain all returns before declaring success.
+	for {
+		select {
+		case _, ok := <-returns:
+			if !ok {
+				return errors.New("publisher return channel closed")
+			}
+			rejected = true
+		default:
+			if rejected {
+				return errors.New("broker rejected or could not route batch")
+			}
 			return ctx.Err()
 		}
 	}

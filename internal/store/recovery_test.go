@@ -51,10 +51,10 @@ func TestIndependentJournalFencesRolledBackSQL(t *testing.T) {
 		t.Fatal(e)
 	}
 	file := domain.ID()
-	if e = sys.ApplyLogLine(ctx, "restore-node", file, 0, 100, "RECOVERYQUEUE", m.ID, m.AttemptID, "", "", "", "", true); e != nil {
-		t.Fatal(e)
-	}
-	if e = sys.ApplyLogLine(ctx, "restore-node", file, 100, 200, "RECOVERYQUEUE", "", "", "sent", m.Recipient, "2.0.0", "accepted", true); e != nil {
+	if e = sys.ApplyLogLines(ctx, "restore-node", file, []LogLine{
+		{Offset: 0, Next: 100, QueueID: "RECOVERYQUEUE", MessageID: m.ID, AttemptID: m.AttemptID, Parsed: true},
+		{Offset: 100, Next: 200, QueueID: "RECOVERYQUEUE", Status: "sent", Recipient: m.Recipient, DSN: "2.0.0", Diagnostic: "accepted", Parsed: true},
+	}); e != nil {
 		t.Fatal(e)
 	}
 	if e = control.Hold(ctx, "test older SQL snapshot"); e != nil {

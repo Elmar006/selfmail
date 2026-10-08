@@ -76,6 +76,7 @@ func run(ctx context.Context) error {
 		return e
 	}
 	defer s.Close()
+	s.Observe = telemetry.ObserveWork
 	if mode == "migrate" {
 		return s.Migrate(ctx)
 	}
@@ -98,6 +99,7 @@ func run(ctx context.Context) error {
 			return e
 		}
 		s.Journal.MaxBytes = cfg.JournalMaxBytes
+		s.Journal.Observe = telemetry.ObserveWork
 	}
 	if mode == "initialize" {
 		if s.Control == nil || s.Journal == nil {

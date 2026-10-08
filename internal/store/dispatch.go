@@ -15,34 +15,75 @@ type Publisher interface {
 	Publish(context.Context, string, domain.Job) error
 }
 
+type BatchPublisher interface {
+	PublishBatch(context.Context, []domain.Dispatch) error
+}
+
 func (s *Store) PublishOne(ctx context.Context, p Publisher) (bool, error) {
+	n, e := s.publishOutbox(ctx, 1, func(ctx context.Context, jobs []domain.Dispatch) error {
+		return p.Publish(ctx, jobs[0].Priority, jobs[0].Job)
+	})
+	return n > 0, e
+}
+
+// PublishBatch commits no outbox row until the complete bounded batch is
+// confirmed and routed. An uncertain commit or partial broker success may replay
+// references, which are deduplicated by the worker's SQL claim.
+func (s *Store) PublishBatch(ctx context.Context, p BatchPublisher, limit int) (int, error) {
+	if limit < 1 || limit > 64 {
+		return 0, fmt.Errorf("outbox batch requires 1..64 jobs")
+	}
+	return s.publishOutbox(ctx, limit, p.PublishBatch)
+}
+
+func (s *Store) publishOutbox(ctx context.Context, limit int, publish func(context.Context, []domain.Dispatch) error) (int, error) {
+	started := time.Now()
+	defer func() {
+		if s.Observe != nil {
+			s.Observe("outbox_publish", time.Since(started))
+		}
+	}()
 	release, e := s.DeliveryPermit(ctx)
 	if e != nil {
-		return false, e
+		return 0, e
 	}
 	defer release()
 	tx, e := s.Pool.Begin(ctx)
 	if e != nil {
-		return false, e
+		return 0, e
 	}
 	defer tx.Rollback(ctx)
-	var id int64
-	var job domain.Job
-	var priority string
-	e = tx.QueryRow(ctx, "SELECT id,tenant_id::text,message_id::text,priority FROM outbox WHERE published_at IS NULL AND available_at<=now() ORDER BY available_at,id FOR UPDATE SKIP LOCKED LIMIT 1").Scan(&id, &job.TenantID, &job.MessageID, &priority)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return false, nil
-	}
+	rows, e := tx.Query(ctx, "SELECT id,tenant_id::text,message_id::text,priority FROM outbox WHERE published_at IS NULL AND available_at<=now() ORDER BY available_at,id FOR UPDATE SKIP LOCKED LIMIT $1", limit)
 	if e != nil {
-		return false, e
+		return 0, e
 	}
-	if e = p.Publish(ctx, priority, job); e != nil {
-		return false, e
+	var ids []int64
+	var jobs []domain.Dispatch
+	for rows.Next() {
+		var id int64
+		var item domain.Dispatch
+		if e = rows.Scan(&id, &item.Job.TenantID, &item.Job.MessageID, &item.Priority); e != nil {
+			rows.Close()
+			return 0, e
+		}
+		ids = append(ids, id)
+		jobs = append(jobs, item)
 	}
-	if _, e = tx.Exec(ctx, "UPDATE outbox SET published_at=now() WHERE id=$1", id); e != nil {
-		return false, e
+	e = rows.Err()
+	rows.Close()
+	if e != nil || len(jobs) == 0 {
+		return 0, e
 	}
-	return true, tx.Commit(ctx)
+	if e = publish(ctx, jobs); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec(ctx, "UPDATE outbox SET published_at=now() WHERE id=ANY($1::bigint[])", ids); e != nil {
+		return 0, e
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return 0, e
+	}
+	return len(jobs), nil
 }
 func (s *Store) Claim(ctx context.Context, job domain.Job, node string) (m domain.Message, e error) {
 	m.NodeID = node

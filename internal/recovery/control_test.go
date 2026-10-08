@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -56,6 +57,32 @@ func TestHoldWaitsForInFlightPermitAndRequiresReconciliation(t *testing.T) {
 	p, e = c.Acquire(ctx)
 	if e != nil {
 		t.Fatal(e)
+	}
+	p.Close()
+}
+
+func TestFileLockCancellationAndRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	held, e := LockFile(context.Background(), path, true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer held.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, e = LockFile(ctx, path, true); !errors.Is(e, context.DeadlineExceeded) {
+		t.Fatal("contended lock ignored cancellation", e)
+	}
+	held.Close()
+	if p, e := LockFile(ctx, path, true); !errors.Is(e, context.DeadlineExceeded) {
+		if p != nil {
+			p.Close()
+		}
+		t.Fatal("expired context acquired a free lock", e)
+	}
+	p, e := LockFile(context.Background(), path, true)
+	if e != nil {
+		t.Fatal("cancelled waiter retained file lock", e)
 	}
 	p.Close()
 }

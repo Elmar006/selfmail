@@ -115,8 +115,26 @@ func ScanFile(ctx context.Context, s *store.Store, node, path string) error {
 }
 func scanLogStream(ctx context.Context, s *store.Store, node, id string, offset int64, source io.Reader) (int64, error) {
 	r := bufio.NewReaderSize(source, 64*1024)
+	batch := make([]store.LogLine, 0, store.MaxLogBatch)
+	readOffset := offset
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if e := s.ApplyLogLines(ctx, node, id, batch); e != nil {
+			return e
+		}
+		offset = readOffset
+		batch = batch[:0]
+		return nil
+	}
 	for ctx.Err() == nil {
 		line, e := r.ReadSlice('\n')
+		if e != nil {
+			if flushErr := flush(); flushErr != nil {
+				return offset, flushErr
+			}
+		}
 		if errors.Is(e, io.EOF) {
 			return offset, nil
 		}
@@ -126,12 +144,15 @@ func scanLogStream(ctx context.Context, s *store.Store, node, id string, offset 
 		if len(line) > 64*1024 {
 			return offset, fmt.Errorf("oversized Postfix log line")
 		}
-		next := offset + int64(len(line))
+		next := readOffset + int64(len(line))
 		ev, ok := ParseLog(string(line))
-		if e = s.ApplyLogLine(ctx, node, id, offset, next, ev.QueueID, ev.MessageID, ev.AttemptID, ev.Status, ev.Recipient, ev.DSN, ev.Diagnostic, ok); e != nil {
-			return offset, e
+		batch = append(batch, store.LogLine{Offset: readOffset, Next: next, QueueID: ev.QueueID, MessageID: ev.MessageID, AttemptID: ev.AttemptID, Status: ev.Status, Recipient: ev.Recipient, DSN: ev.DSN, Diagnostic: ev.Diagnostic, Parsed: ok})
+		readOffset = next
+		if len(batch) == store.MaxLogBatch {
+			if e = flush(); e != nil {
+				return offset, e
+			}
 		}
-		offset = next
 	}
 	return offset, ctx.Err()
 }
