@@ -235,6 +235,7 @@ func run(ctx context.Context) error {
 			return e
 		}
 		defer lim.Client.Close()
+		lim.DestinationRate = cfg.DestinationRate
 		w := &worker.Worker{Store: s, Limiter: lim, Vault: vault, MTA: &mta.Client{Address: cfg.PostfixAddr, Hostname: cfg.SMTPHostname, Timeout: cfg.SMTPTimeout}, NodeID: cfg.NodeID, AllowUnverified: cfg.AllowUnverified, BounceDomain: bounceDomain, BounceKey: bounceKey, WireLimit: cfg.WireLimit}
 		return worker.RunConsumers(ctx, w, cfg.RabbitURL, cfg.Concurrency)
 	case "dispatcher":

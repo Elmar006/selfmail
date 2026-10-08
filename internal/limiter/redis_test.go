@@ -41,3 +41,31 @@ func TestRedisAtomicBurst(t *testing.T) {
 		t.Fatalf("allowed %d, want 5", allowed.Load())
 	}
 }
+
+func TestDestinationPolicyIsSharedAcrossTenantsAndWorkers(t *testing.T) {
+	if os.Getenv("REDIS_URL") == "" {
+		t.Skip("REDIS_URL not set")
+	}
+	a, e := Open(os.Getenv("REDIS_URL"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer a.Client.Close()
+	b, e := Open(os.Getenv("REDIS_URL"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Client.Close()
+	a.DestinationRate, b.DestinationRate = 1, 1
+	ctx := context.Background()
+	destination := domain.ID() + ".example.test"
+	if wait, e := a.Take(ctx, domain.ID(), destination, 1000); e != nil || wait != 0 {
+		t.Fatal("initial destination token rejected", wait, e)
+	}
+	if wait, e := b.Take(ctx, domain.ID(), destination, 1000); e != nil || wait <= 0 {
+		t.Fatal("second tenant/worker bypassed shared destination limit", wait, e)
+	}
+	if wait, e := b.Take(ctx, domain.ID(), domain.ID()+".example.test", 1000); e != nil || wait != 0 {
+		t.Fatal("different destination shared the exhausted bucket", wait, e)
+	}
+}

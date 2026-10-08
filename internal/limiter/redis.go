@@ -7,7 +7,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type Limiter struct{ Client *redis.Client }
+type Limiter struct {
+	Client          *redis.Client
+	DestinationRate int // Configure before use; all workers must share the policy.
+}
 
 func Open(raw string) (*Limiter, error) {
 	o, e := redis.ParseURL(raw)
@@ -17,7 +20,7 @@ func Open(raw string) (*Limiter, error) {
 	o.DialTimeout = 3 * time.Second
 	o.ReadTimeout = 2 * time.Second
 	o.WriteTimeout = 2 * time.Second
-	return &Limiter{redis.NewClient(o)}, nil
+	return &Limiter{Client: redis.NewClient(o), DestinationRate: 20}, nil
 }
 
 // Both buckets are consumed atomically; Redis TIME avoids host clock skew.
@@ -40,8 +43,12 @@ return 0
 `)
 
 func (l *Limiter) Take(ctx context.Context, tenant, destination string, tenantRate int) (time.Duration, error) {
+	rate := l.DestinationRate
+	if rate == 0 {
+		rate = 20
+	}
 	// Shared hash tag supports a future Redis Cluster deployment without cross-slot Lua.
-	n, e := acquire.Run(ctx, l.Client, []string{"mail:{limits}:tenant:" + tenant, "mail:{limits}:destination:" + destination}, tenantRate, 20).Int64()
+	n, e := acquire.Run(ctx, l.Client, []string{"mail:{limits}:tenant:" + tenant, "mail:{limits}:destination:" + destination}, tenantRate, rate).Int64()
 	return time.Duration(n) * time.Millisecond, e
 }
 func (l *Limiter) Ingress(ctx context.Context, tenant string, rate int) (time.Duration, error) {

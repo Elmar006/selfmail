@@ -13,6 +13,7 @@ type Config struct {
 	Env, DatabaseURL, AdminDatabaseURL, RabbitURL, RedisURL, MasterKey                              string
 	HTTPAddr, SMTPAddr, SMTPHostname, CertFile, KeyFile, PostfixAddr, PostfixLog, NodeID, PublicURL string
 	Concurrency                                                                                     int
+	DestinationRate                                                                                 int
 	AllowUnverified, AllowPlainSMTP, AllowPrivateWebhooks                                           bool
 	SMTPTimeout                                                                                     time.Duration
 	ControlDir, JournalDir                                                                          string
@@ -33,6 +34,14 @@ func Load() (Config, error) {
 		if e != nil || c.Concurrency < 1 || c.Concurrency > 16 {
 			return c, fmt.Errorf("invalid WORKER_CONCURRENCY")
 		}
+	}
+	c.DestinationRate = 20
+	if raw := os.Getenv("DESTINATION_RATE_PER_SECOND"); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 || n > 1000 {
+			return c, fmt.Errorf("DESTINATION_RATE_PER_SECOND must be 1..1000")
+		}
+		c.DestinationRate = n
 	}
 	c.ControlDir = os.Getenv("CONTROL_DIR")
 	c.JournalDir = os.Getenv("JOURNAL_DIR")
