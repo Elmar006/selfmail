@@ -6,6 +6,7 @@
 
 - Generalized both READMEs and integration/deployment guides for any application or backend, using neutral account, event, document, and task examples.
 - Included the already verified bounded outbox/broker batches, grouped log-journal durability, transactional log reconciliation, worker backpressure, timing metrics, and configurable destination rate.
+- Updated the digest-pinned application and PostgreSQL helper build toolchain to [Go 1.26.9](https://go.dev/doc/devel/release#go1.26.9), resolving newly published standard-library vulnerability findings that blocked release verification on Go 1.26.8.
 - Retained the `v0.0.1` version number at the maintainer's request and updated its Git reference and published release builds. The original release source remains identifiable as `d446bc9b4b8731c79da4d88f604c31c82a7cceeb`; the performance evidence keeps its original measured revisions.
 - Documented source/image identity and Go module cache behavior when selecting the republished build or a reproducible SDK revision.
 

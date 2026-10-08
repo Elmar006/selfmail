@@ -214,4 +214,4 @@ go get github.com/Elmar006/selfmail/pkg/client@c36df95447f92640e972af846d14e5d46
 go list -m -json github.com/Elmar006/selfmail
 ```
 
-Go records the resolved commit as a pseudo-version. Keep that result in `go.mod`/`go.sum`; do not disable checksum verification to accept changed contents under a cached tag. This SDK revision differs from the republished documentation snapshot only in documentation.
+Go records the resolved commit as a pseudo-version. Keep that result in `go.mod`/`go.sum`; do not disable checksum verification to accept changed contents under a cached tag. Its SDK source matches the republished server; documentation and build-toolchain configuration differ. Use a supported, patched Go toolchain when building the consumer application.

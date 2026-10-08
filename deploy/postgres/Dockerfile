@@ -1,4 +1,4 @@
-FROM golang:1.26-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107 AS gosu-build
+FROM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS gosu-build
 RUN git clone https://github.com/tianon/gosu.git /gosu && cd /gosu \
  && git checkout 6456aaa0f3c854d199d0f037f068eb97515b7513 \
  && go mod download && go mod verify \
