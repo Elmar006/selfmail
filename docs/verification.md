@@ -10,6 +10,9 @@ docker compose up -d --build --wait
 docker compose --profile test build tests
 docker compose --profile test run --rm tests sh scripts/verify.sh
 docker compose --profile test run --rm acceptance
+docker compose --profile test run --rm --no-deps \
+  -e ACCEPTANCE_API_URL=http://api:8080 -e ACCEPTANCE_SINK_URL=http://sink:8025 \
+  tests go run ./cmd/benchmark -count 12 -concurrency 2 -timeout 2m
 python3 -m pip install PyYAML==6.0.3
 python3 scripts/check-api-contract.py
 docker run --rm -v "$PWD/deploy/prometheus:/rules:ro" -w /rules \
@@ -45,9 +48,30 @@ The final local routine run passed the full race/vet/build/module/vulnerability 
 
 A second independent read-only source review checked the changes and found additional edge cases before publication. They received regressions for retention tombstones/key reuse, recovery surrogate collision, replacement-host identity import, cleanup continuation beyond one batch, incorrect export keys, and folded/oversized MIME headers. The reviewer did not independently execute the final tests; the local runtime/test evidence above comes from the implementation verification run.
 
-## Load and resource evidence
+## Throughput evidence for 0.0.1
 
-The mixed-payload generator cycles through three tenants/priorities, includes 2 MiB PDF attachment bytes, and sends a near-5-MiB UTF-8 body periodically. It requires the fixed development API/sink URLs.
+The earlier publication highlighted the 900-message soak without making its purpose sufficiently prominent. Its generator intentionally offered only 0.5/s. That figure was **never a measurement of the service's maximum throughput**. The following separate unpaced, concurrent measurements replace it as throughput evidence.
+
+Runs on October 8 used Docker 29.7.2, a Linux/amd64 VM with 12 logical CPUs and approximately 7.67 GiB RAM, on an Intel Core i5-12400F host. Other coffee/jewelry application containers remained running. All service CPU/memory limits from `compose.yaml` were retained; monitoring/backups/history drills were not active during these timed runs. Runtime core sources were unchanged from `760724b`; the new generator uses the same REST, outbox, RabbitMQ, DKIM, Postfix and reconciliation paths. No delivery provider or Internet mailbox was used.
+
+Three fresh tenants per run used rate 10,000/s and one recipient per request; clients had concurrency **2**, and all recipients belonged to one synthetic destination domain. Redis's 20/s destination bucket remained enabled. All recipients routed to the **single development SMTP sink**. Setup/domain-key generation is excluded from timing.
+
+| Profile | Requested / accepted / delivered | API acceptance window | API accepted/s | Time to all delivery confirmations | Confirmed end-to-end/s | API latency p95 / p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 KiB bodies; stock Postfix destination delay `1s` | 120 / 120 / 120 | 5.145 s | 23.32 | 121.004 s | 0.99 | 247.98 / 335.47 ms |
+| 1 KiB bodies; local Postfix destination delay `0s` | 600 / 600 / 600 | 43.785 s | 13.70 | 73.007 s | 8.22 | 445.25 / 939.89 ms |
+| 1 KiB bodies; repeat with local Postfix delay `0s` | 1200 / 1200 / 1200 | 69.144 s | 17.36 | 114.012 s | 10.53 | 333.64 / 718.70 ms |
+| 1 KiB bodies + 2 MiB random-byte attachment each; local delay `0s` | 96 / 96 / 96 | 14.724 s | 6.52 | 17.796 s | 5.39 | 522.26 / 854.65 ms |
+
+Every row had **zero API errors, zero missing copies, zero extra sink copies**, and all SQL messages in `delivered`. The last row used incompressible synthetic binary data, not repeated-character PDF bytes or actual receipt generation. An exploratory compressible fixture was replaced; its more favorable result is not used as the attachment capacity profile. Postfix concurrency remained 5 and recipient grouping 50 throughout. The temporary `0s` relay pacing was restored to `1s` afterward.
+
+An initial overload probe used 8 API clients and 120 requests: **2 accepted, 118 HTTP 503**, both accepted messages delivered once. It **failed** the benchmark's complete-workload criteria and is not reported as successful throughput. The shared ingress work budget intentionally admits two heavy operations; applications must use backpressure and idempotent retries rather than assume arbitrary concurrency is accepted.
+
+These are finite closed-loop local workloads, not an absolute saturation curve, sustained multi-hour capacity, Internet delivery guarantee, or tested VPS SLA. Different run lengths and host activity produce different observed rates; the results are not averaged into an unsupported headline maximum. Delivery rate includes queue drain and SQL confirmation; acceptance rate describes the API. Detailed definitions, safeguards and commands are in [benchmarking](benchmarking.md). Resource samples are in [resources](resources.md).
+
+## Fixed-rate stability and earlier resource evidence
+
+The separate mixed-payload soak generator cycles through three tenants/priorities, includes 2 MiB PDF attachment bytes, and sends a near-5-MiB UTF-8 body periodically. It requires the fixed development API/sink URLs. Its `-interval 2s` schedules 0.5 requests/s and does not search for a throughput ceiling.
 
 ```sh
 docker compose --profile test run --rm \

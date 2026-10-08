@@ -1,4 +1,5 @@
-// loadtest exercises an isolated development sink; it never targets Internet mail.
+// loadtest is a fixed-rate stability soak, not a throughput benchmark.
+// It exercises an isolated development sink; it never targets Internet mail.
 package main
 
 import (
@@ -18,7 +19,7 @@ import (
 
 func main() {
 	duration := flag.Duration("duration", 30*time.Minute, "steady load duration")
-	interval := flag.Duration("interval", 2*time.Second, "acceptance interval")
+	interval := flag.Duration("interval", 2*time.Second, "offered interval (2s = 0.5/s); not a capacity measurement")
 	flag.Parse()
 	if e := run(*duration, *interval); e != nil {
 		fmt.Fprintln(os.Stderr, e)

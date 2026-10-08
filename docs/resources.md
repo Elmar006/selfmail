@@ -2,6 +2,8 @@
 
 Resource use depends on retained payload size, attachment frequency, remote deferrals, backup work, and history. Acceptance rate is not delivery rate. A fast local sink cannot model slow or rejecting Internet MX servers.
 
+The historical **900 messages in 30 minutes** was a fixed-rate stability workload intentionally set to **0.5/s**, not a capacity result. Separate unpaced measurements delivered 1200 small messages in 114 seconds with the local Postfix delay set to `0s`, while preserving service CPU/memory ceilings. See the exact workloads, both acceptance/delivery rates and limits in [verification](verification.md), and the [benchmark method](benchmarking.md).
+
 ## Planning envelope
 
 | Profile | Starting allocation |
@@ -38,9 +40,30 @@ PostgreSQL uses 128 MiB shared buffers, 120 connections, 4 MiB work_mem, and 256
 
 Go `GOMEMLIMIT` is a soft managed-heap target, not an RSS guarantee. Container ceilings cover other memory too; the ingress budget admits two heavy operations and worker MIME work is limited to four in-flight jobs. Raising `WORKER_CONCURRENCY` increases consumers per priority without removing that shared budget. Multiple worker replicas multiply the process budgets and require careful sizing/coordinated deployment.
 
-## Measured local profile
+## Measured local throughput resources
 
-Verification host: Docker 29.7.2, Linux VM with **12 CPUs / about 8 GiB RAM**. These measurements are not from a 2-vCPU VPS. The October 8 repeat sampled Docker statistics throughout a 30-minute mixed-payload run; 899 messages were accepted/delivered, zero duplicates, at approximately 0.5/s. It included other verification work and a PostgreSQL service restart while credential provisioning changed.
+The 0.0.1 throughput profiles used the same Docker/Linux VM (12 logical CPUs, about 7.67 GiB RAM; Intel Core i5-12400F host) alongside other running application containers. No monitoring/backups/history drill was active during the timed profiles. The table below reports each service's largest observed Docker working-set sample across the paced 120-message run, unpaced 600/1200-message runs, and attachment probes, through the final random-byte attachment run at 18:57:24 UTC on October 8.
+
+| Service | Peak sampled MiB |
+|---|---:|
+| API | 67.57 |
+| Worker | 66.40 |
+| PostgreSQL | 315.50 |
+| RabbitMQ | 170.90 |
+| Redis | 36.68 |
+| Postfix | 45.62 |
+| Reconciler | 25.05 |
+| Dispatcher | 9.51 |
+| Maintainer | 6.33 |
+| Webhooks | 5.69 |
+| Bounce | 3.20 |
+| Development sink, outside core sizing | 50.55 |
+
+These are sampled working sets, not reserved RAM, total host memory, absolute peaks, or the cost of the earlier long soak/backup/history profiles. The retained measurement window contains 72 sampling cycles from 18:48:30 to 18:57:22 UTC; a nominal five-second loop also spends time collecting statistics and cannot prove absolute peaks. The generator/compiler is outside the table and ran in a separate test container capped at 2 GiB / 2 CPUs. Sampled per-service maxima do not necessarily occur simultaneously. All running service containers were inspected afterward: no OOM kill or restart was recorded. Stock Postfix pacing was restored after benchmarking.
+
+## Earlier fixed-rate soak and history profile
+
+Verification host: Docker 29.7.2, Linux VM with **12 CPUs / about 8 GiB RAM**. These measurements are not from a 2-vCPU VPS. The earlier October 8 repeat sampled Docker statistics throughout a 30-minute mixed-payload stability soak; 899 messages were accepted/delivered, zero duplicates, at an intentionally offered rate of approximately 0.5/s. It included other verification work and a PostgreSQL service restart while credential provisioning changed. This profile measures resource use under that offered load, not maximum throughput.
 
 | Service | Peak sampled MiB, repeat | Earlier history/backup stress peak MiB |
 |---|---:|---:|

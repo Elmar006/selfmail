@@ -2,6 +2,7 @@
 <p align="center">
   <a href="https://github.com/Elmar006/selfmail/actions/workflows/ci.yaml"><img src="https://github.com/Elmar006/selfmail/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-16b8a6" alt="MIT"></a>
+  <a href="https://github.com/Elmar006/selfmail/releases/tag/v0.0.1"><img src="https://img.shields.io/badge/version-0.0.1-16b8a6" alt="Version 0.0.1"></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" alt="Go 1.26">
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 18">
   <img src="https://img.shields.io/badge/RabbitMQ-4.3-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ 4.3">
@@ -15,7 +16,7 @@
 
 **selfmail is a reusable, self-hosted transactional email service.** Connect any backend through REST, authenticated SMTP submission, or the Go SDK. Run one installation for several projects with separate credentials, domains, quotas, templates, and delivery events.
 
-Developed by **Альмар 06 / [Elmar006](https://github.com/Elmar006)**. The project is free software under **[MIT](LICENSE)**: use, modify, and integrate it in personal or commercial projects. No paid delivery provider is required. You operate the server and domains; infrastructure and third-party software retain their own costs and licenses.
+Developed by **[Эльмар](https://github.com/Elmar006)**. The project is free software under **[MIT](LICENSE)**: use, modify, and integrate it in personal or commercial projects. No paid delivery provider is required. You operate the server and domains; infrastructure and third-party software retain their own costs and licenses.
 
 ## Who it is for
 
@@ -114,7 +115,9 @@ For receipts, commit the order and an email task in **your application's transac
 
 Configured memory ceilings sum to **3.75 GiB for core services**, or **4.5 GiB with monitoring, backup, and Caddy**, excluding builds/tests and the OS. Consumption is normally below those ceilings. [Resource sizing](docs/resources.md) gives measured samples, individual limits, and disk assumptions.
 
-A local test delivered **900/900 messages without duplicates in 30 minutes**, at 0.5 messages/s across three tenants, including large UTF-8 bodies and 2 MiB attachments. A separate million-row history test exercised indexed recovery and metrics. These results describe the local sink, not Internet delivery capacity. See [verification scope](docs/verification.md).
+**Measured local throughput:** **1200/1200 messages delivered without duplicates in 114 seconds**, approximately **10.5 messages/s end to end** and **17.4 messages/s accepted through the API**. This short run used 1 KiB bodies, three tenants, two concurrent clients, unchanged service CPU/memory limits, and a local Postfix relay with its destination delay temporarily set to `0s`.
+
+With stock Postfix `1s` pacing to that single relay, 120/120 messages completed in 121 seconds while the API accepted them at 23.3/s. The older **900 messages in 30 minutes** result was a stability soak intentionally offered at **0.5/s**, **not a capacity limit**. These are measured local profiles, not maximum-throughput or Internet-delivery guarantees. See the [benchmark method](docs/benchmarking.md) and [verification results](docs/verification.md).
 
 Internet delivery requires a static public IP, outgoing TCP/25, PTR/A records, sender domains, SPF/DKIM/DMARC, SMTP TLS, incoming DSNs, and IP reputation management. The application and mail service can use related subdomains; a working website alone does not satisfy these requirements.
 
@@ -127,6 +130,7 @@ Internet delivery requires a static public IP, outgoing TCP/25, PTR/A records, s
 | [Operations](docs/operations.md) | Deployment, DNS, TLS, monitoring, retention, upgrades |
 | [Recovery](docs/recovery.md) | Holds, evidence, backups, PITR, safe release |
 | [Resources](docs/resources.md) | Memory/CPU limits, measured profile, disk sizing |
+| [Benchmarking](docs/benchmarking.md) | Acceptance vs delivery throughput, profiles, overload, reproduction |
 | [Security](docs/security.md) | Trust boundaries, secrets, dependencies, infrastructure gates |
 | [Verification](docs/verification.md) | Reproducible checks and validated/unvalidated scenarios |
 | [OpenAPI](api/openapi.yaml) | HTTP contract and byte limits |
@@ -135,4 +139,4 @@ Internet delivery requires a static public IP, outgoing TCP/25, PTR/A records, s
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and [SECURITY.md](SECURITY.md) for responsible reporting.
 
-Copyright © 2026 **Альмар 06**. selfmail's code, documentation, and original artwork are distributed under [MIT](LICENSE). Dependencies and container software use their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+Copyright © 2026 **Эльмар**. selfmail's code, documentation, and original artwork are distributed under [MIT](LICENSE). Dependencies and container software use their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
