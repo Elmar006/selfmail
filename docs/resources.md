@@ -2,7 +2,7 @@
 
 Resource use depends on retained payload size, attachment frequency, remote deferrals, backup work, and history. Acceptance rate is not delivery rate. A fast local sink cannot model slow or rejecting Internet MX servers.
 
-The historical **900 messages in 30 minutes** was a fixed-rate stability workload intentionally set to **0.5/s**, not a capacity result. The 0.0.1 unpaced profile delivered 1200 small messages in 114 seconds with the local Postfix delay set to `0s`. Current development code batches dispatch and reconciliation with the same default CPU/memory limits; measured comparisons and variation are in [verification](verification.md), with definitions in the [benchmark method](benchmarking.md).
+The historical **900 messages in 30 minutes** was a fixed-rate stability workload intentionally set to **0.5/s**, not a capacity result. The original `d446bc9` release snapshot's unpaced profile delivered 1200 small messages in 114 seconds with the local Postfix delay set to `0s`. The optimized implementation batches dispatch and reconciliation with the same default CPU/memory limits; measured comparisons and variation are in [verification](verification.md), with definitions in the [benchmark method](benchmarking.md).
 
 ## Planning envelope
 
@@ -42,7 +42,7 @@ Go `GOMEMLIMIT` is a soft managed-heap target, not an RSS guarantee. Container c
 
 ## Measured local throughput resources
 
-The 0.0.1 throughput profiles used the same Docker/Linux VM (12 logical CPUs, about 7.67 GiB RAM; Intel Core i5-12400F host) alongside other running application containers. No monitoring/backups/history drill was active during the timed profiles. The table below reports each service's largest observed Docker working-set sample across the paced 120-message run, unpaced 600/1200-message runs, and attachment probes, through the final random-byte attachment run at 18:57:24 UTC on October 8.
+The original release snapshot's throughput profiles used the same Docker/Linux VM (12 logical CPUs, about 7.67 GiB RAM; Intel Core i5-12400F host) alongside other running application containers. No monitoring/backups/history drill was active during the timed profiles. The table below reports each service's largest observed Docker working-set sample across the paced 120-message run, unpaced 600/1200-message runs, and attachment probes, through the final random-byte attachment run at 18:57:24 UTC on October 8.
 
 | Service | Peak sampled MiB |
 |---|---:|
@@ -105,7 +105,7 @@ Backup      ≈ retained full/diff/incremental data + archived WAL
 Staging     ≈ number of unremoved exports × snapshot prefix size
 ```
 
-JSON/base64 adds roughly one third to binary attachment bytes; include row/index/WAL/backup overhead. For example, 100 receipts/day with 2 MiB PDFs for seven days require about 1.8 GiB of serialized attachment data alone and exceed the default per-tenant cap. Small technical mail and occasional attachments have a very different profile.
+JSON/base64 adds roughly one third to binary attachment bytes; include row/index/WAL/backup overhead. For example, 100 messages/day with 2 MiB document attachments for seven days require about 1.8 GiB of serialized attachment data alone and exceed the default per-tenant cap. Small technical mail and occasional attachments have a very different profile.
 
 Bodies are eligible after seven days of final outcomes. Remote deferrals, unknown handoffs, or protected callbacks extend storage. Queue/dead-letter reference history, Postfix archives, evidence staging, and encrypted backups also require independent disk monitoring. The dead-letter queue and evidence staging have no automatic purge in this release.
 

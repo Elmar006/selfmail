@@ -48,11 +48,11 @@ The final local routine run passed the full race/vet/build/module/vulnerability 
 
 A second independent read-only source review checked the changes and found additional edge cases before publication. They received regressions for retention tombstones/key reuse, recovery surrogate collision, replacement-host identity import, cleanup continuation beyond one batch, incorrect export keys, and folded/oversized MIME headers. The reviewer did not independently execute the final tests; the local runtime/test evidence above comes from the implementation verification run.
 
-## Throughput evidence for 0.0.1
+## Throughput evidence for the original release snapshot
 
 The earlier publication highlighted the 900-message soak without making its purpose sufficiently prominent. Its generator intentionally offered only 0.5/s. That figure was **never a measurement of the service's maximum throughput**. The following separate unpaced, concurrent measurements replace it as throughput evidence.
 
-Runs on October 8 used Docker 29.7.2, a Linux/amd64 VM with 12 logical CPUs and approximately 7.67 GiB RAM, on an Intel Core i5-12400F host. Other coffee/jewelry application containers remained running. All service CPU/memory limits from `compose.yaml` were retained; monitoring/backups/history drills were not active during these timed runs. Runtime core sources were unchanged from `760724b`; the new generator uses the same REST, outbox, RabbitMQ, DKIM, Postfix and reconciliation paths. No delivery provider or Internet mailbox was used.
+Runs on October 8 used Docker 29.7.2, a Linux/amd64 VM with 12 logical CPUs and approximately 7.67 GiB RAM, on an Intel Core i5-12400F host. Other application containers remained running. All service CPU/memory limits from `compose.yaml` were retained; monitoring/backups/history drills were not active during these timed runs. Runtime core sources were unchanged from `760724b`; the new generator uses the same REST, outbox, RabbitMQ, DKIM, Postfix and reconciliation paths. No delivery provider or Internet mailbox was used. These measurements describe the original release snapshot `d446bc9`, not every build later published under the same version label.
 
 Three fresh tenants per run used rate 10,000/s and one recipient per request; clients had concurrency **2**, and all recipients belonged to one synthetic destination domain. Redis's 20/s destination bucket remained enabled. All recipients routed to the **single development SMTP sink**. Setup/domain-key generation is excluded from timing.
 
@@ -71,16 +71,16 @@ These are finite closed-loop local workloads, not an absolute saturation curve, 
 
 ## Batching comparison after 0.0.1
 
-The optimized implementation is development code after the immutable 0.0.1 release: core change **`93938aa`**, followed by **`bebce3d`** exposing the destination rate without changing its default. No schema migration, API/SDK contract change, resource-limit increase, or removal of durable-write/confirm checks is required.
+The optimized implementation was introduced after the original `d446bc9` release snapshot: core change **`93938aa`**, followed by **`bebce3d`** exposing the destination rate without changing its default. The maintainer has subsequently included these changes and application-neutral documentation in a republished **`v0.0.1`**, keeping the version number. No schema migration, API/SDK contract change, resource-limit increase, or removal of durable-write/confirm checks is required. The historical results below retain their measured commit identities; version labels alone do not identify those earlier runs.
 
 The comparison retained the same Docker/Linux host and service limits, three fresh tenants per workload, 1200 one-recipient requests, 1 KiB bodies, client concurrency two, Redis destination policy 20/s, Postfix destination concurrency 5/grouping 50, and the single controlled development sink. Only local Postfix destination delay was temporarily `0s`. Other application containers remained active; host/storage conditions were not isolated.
 
 | Runtime / storage state | API acceptance window | Accepted/s | All delivery confirmations | Confirmed end-to-end/s | API p95 / p99 |
 |---|---:|---:|---:|---:|---:|
-| 0.0.1-equivalent core + timing hooks; fresh storage | 82.899 s | 14.48 | 134.012 s | 8.95 | 418.13 / 828.89 ms |
+| Original `d446bc9` core + timing hooks; fresh storage | 82.899 s | 14.48 | 134.012 s | 8.95 | 418.13 / 828.89 ms |
 | Optimized `93938aa`; fresh storage | 77.694 s | 15.45 | 78.701 s | 15.25 | 323.98 / 676.93 ms |
 | Optimized `bebce3d`; repeat after preceding workload, same default policy | 120.485 s | 9.96 | 121.496 s | 9.88 | 630.45 / 1192.31 ms |
-| 0.0.1-equivalent core; recheck on accumulated completed history | 111.002 s | 10.81 | 189.022 s | 6.35 | 556.24 / 1075.31 ms |
+| Original `d446bc9` core; recheck on accumulated completed history | 111.002 s | 10.81 | 189.022 s | 6.35 | 556.24 / 1075.31 ms |
 
 All four workloads had **1200 accepted, 1200 delivered, zero API errors, zero missing copies, and zero extra sink copies**. Their run IDs were `3ba2b4f5-eb95-42fb-b2b6-7ecb22b6bf7f`, `cb04b2a5-4ae3-45fe-9d13-4ca408f47dec`, `8bfc561d-79c6-4453-928f-596af478a20c`, and `e2cf3abe-9231-477d-b75b-d4c0cfca7a3c`; start times were October 8 at 21:38:15, 21:56:39, 22:06:02, and 22:10:09 UTC, respectively. Both baseline images differ from `d446bc9` only by the same timing hooks used in the optimized code.
 
@@ -98,7 +98,7 @@ The final full formatting/module/race/vet/build/govulncheck pipeline passed agai
 
 The final `bebce3d` runtime also passed the complete acceptance flow after restoring stock Postfix delay to `1s`: REST/outbox/RabbitMQ/worker/Postfix/sink/delivered, three tenants, SMTP AUTH, DKIM, attachments, templates, idempotency, RLS, quotas, cancellation, relay protection, hard bounce, late DSN, and signed callbacks. Final running containers reported no OOM kill or automatic restart; intentional image replacements are separate from restart counters.
 
-A larger-payload check on `bebce3d` sent **96 messages with a random 2 MiB attachment each**: acceptance **29.325 seconds / 3.27/s**, complete delivery confirmation **31.003 seconds / 3.10/s**, API p95/p99 **1704.31/2587.86 ms**, zero errors/missing/extra copies. Run `03946515-9fe0-41b9-abd6-1ffb2edfdab8` started at 22:14:44 UTC. This is slower than the earlier release's 17.796-second attachment profile on different host conditions; it is retained as a payload check, and no attachment-throughput improvement is claimed. Benchmark the application's actual receipt sizes and payload mix rather than extrapolating the small-body comparison.
+A larger-payload check on `bebce3d` sent **96 messages with a random 2 MiB attachment each**: acceptance **29.325 seconds / 3.27/s**, complete delivery confirmation **31.003 seconds / 3.10/s**, API p95/p99 **1704.31/2587.86 ms**, zero errors/missing/extra copies. Run `03946515-9fe0-41b9-abd6-1ffb2edfdab8` started at 22:14:44 UTC. This is slower than the earlier release snapshot's 17.796-second attachment profile on different host conditions; it is retained as a payload check, and no attachment-throughput improvement is claimed. Benchmark the application's actual document sizes and payload mix rather than extrapolating the small-body comparison.
 
 ## Fixed-rate stability and earlier resource evidence
 

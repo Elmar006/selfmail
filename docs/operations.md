@@ -7,7 +7,7 @@ Use Linux for production and Docker Desktop/WSL for Windows development. Compose
 ```sh
 sh scripts/init-local.sh
 docker compose up -d --build --wait
-docker compose exec worker selfmail tenant create --name coffee --domain coffee.example.test
+docker compose exec worker selfmail tenant create --name app --domain app.example.test
 docker compose --profile observability up -d prometheus alertmanager
 ```
 
@@ -158,7 +158,7 @@ Make the replacement file readable by the command's UID through a targeted mount
 | Completed file dedupe/cursors | 92 days |
 | Independent journal | Append-only; capacity bound, no automatic compaction |
 
-These are minimum ages for eligibility, not statutory or exact deletion deadlines. Active work, unknown handoffs, pending callbacks, and cleanup failure extend retention. Change the policy through a reviewed implementation/configuration change for your legal/business requirements. Retention horizons are not environment-configurable; journal/MIME capacities and, in current development code, the destination delivery rate are.
+These are minimum ages for eligibility, not statutory or exact deletion deadlines. Active work, unknown handoffs, pending callbacks, and cleanup failure extend retention. Change the policy through a reviewed implementation/configuration change for your legal/business requirements. Retention horizons are not environment-configurable; journal/MIME capacities and the destination delivery rate are.
 
 Retention retirement decisions are durable outside SQL before commit. If the cleanup transaction fails after recording a retirement, normal SQL may temporarily retain eligible rows; subsequent reconciliation applies the recorded decision. A 90-day key can be reused only after its tombstone is actually retired/deleted. SQL metadata returns `410` while the tombstone remains.
 

@@ -1,14 +1,14 @@
 # Integrating an application
 
-Treat selfmail as an internal network service. Keep its key in your backend secrets, commit mail tasks alongside business changes, and deliver them asynchronously. The same contract works for a coffee shop, jewelry store, and later projects.
+Treat selfmail as an internal network service for any application that needs transactional email. Keep its key in your backend secrets, commit mail tasks alongside application state changes, and deliver them asynchronously. REST, authenticated SMTP, and the Go SDK provide the same delivery boundary across programming languages, industries, and deployment environments.
 
 ## Tenants and keys
 
 ```sh
 docker compose exec worker selfmail tenant create \
-  --name coffee --domain coffee.example.test --rate 10 --daily-limit 10000
+  --name app-a --domain app-a.example.test --rate 10 --daily-limit 10000
 docker compose exec worker selfmail tenant create \
-  --name jewelry --domain jewelry.example.test --rate 10 --daily-limit 10000
+  --name app-b --domain app-b.example.test --rate 10 --daily-limit 10000
 docker compose exec worker selfmail key issue \
   --tenant TENANT_UUID --scopes messages:write,messages:read
 ```
@@ -26,7 +26,7 @@ The create command shows the tenant UUID, a new secret key, and domain details. 
 
 Scopes do not make the admin CLI a public API. It runs with a trusted infrastructure role. Revocation uses `selfmail key revoke --token KEY`; avoid shell-history/process exposure when executing this administrative command. Revocation blocks new acceptance, including subsequent DATA in a previously authenticated SMTP connection. Existing accepted mail is handled through its own status/policy.
 
-Projects may use the same From domain, but each tenant must publish its own DNS ownership proof and unique DKIM selector. Subdomains such as `accounts.coffee.example.org` and `orders.shop.example.org` make ownership and reputation policy easier to manage.
+Applications may use the same From domain, but each tenant must publish its own DNS ownership proof and unique DKIM selector. Subdomains such as `notifications.app-a.example.org` and `accounts.app-b.example.org` allow separate ownership and reputation policies. Tenant names and sender domains are supplied by the operator; the service does not require an application-specific naming scheme.
 
 ## REST acceptance
 
@@ -34,17 +34,17 @@ Projects may use the same From domain, but each tenant must publish its own DNS 
 curl https://mail-api.your-domain.tld/v1/messages \
   -H 'Authorization: Bearer YOUR_KEY' \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: coffee:receipt:order-42:v1' \
+  -H 'Idempotency-Key: app-a:document-ready:document-42:v1' \
   -d '{
-    "from":"receipts@coffee.your-domain.tld",
-    "from_name":"Coffee Shop",
-    "to":["buyer@example.net"],
-    "subject":"Your receipt",
-    "text":"Thank you for your purchase. Your receipt is attached.",
-    "html":"<p>Thank you for your purchase.</p>",
+    "from":"notifications@app-a.your-domain.tld",
+    "from_name":"Application A",
+    "to":["recipient@example.net"],
+    "subject":"Your document is ready",
+    "text":"Your generated document is attached.",
+    "html":"<p>Your generated document is attached.</p>",
     "priority":"normal",
-    "attachments":[{"filename":"receipt.pdf","content_type":"application/pdf","data":"BASE64_PDF_BYTES"}],
-    "metadata":{"order_id":"42"}
+    "attachments":[{"filename":"document.pdf","content_type":"application/pdf","data":"BASE64_DOCUMENT_BYTES"}],
+    "metadata":{"document_id":"42","event_id":"event-42"}
   }'
 ```
 
@@ -56,13 +56,13 @@ New acceptance returns `202`:
 
 A matching retry returns `200` with the original IDs and `replayed:true`. One message is created per recipient; the body is shared within the batch. Suppression, quota, and authorization failures reject the batch before commit.
 
-Use a deterministic business key such as `receipt:ORDER_ID:VERSION` or a persisted UUID such as `password-reset:REQUEST_UUID`. A timeout can happen after commit: retry **the same normalized request and key**. Changed content under the key returns `409`. Do not produce a fresh random key on every network retry. The default tombstone horizon is at least 90 days, extended while protected work remains; after cleanup expires it, reuse is a new operation.
+Use a deterministic operation key such as `document-ready:DOCUMENT_ID:VERSION` or a persisted UUID such as `password-reset:REQUEST_UUID`. A timeout can happen after commit: retry **the same normalized request and key**. Changed content under the key returns `409`. Do not produce a fresh random key on every network retry. The default tombstone horizon is at least 90 days, extended while protected work remains; after cleanup expires it, reuse is a new operation.
 
 ## Priority, timing, and limits
 
 | Field/limit | Contract |
 |---|---|
-| `priority` | `critical` for short-lived security links, `normal` for receipts, `bulk` for larger technical notification streams |
+| `priority` | `critical` for short-lived security links, `normal` for application events/documents, `bulk` for larger technical notification streams |
 | `send_at` | RFC3339 timestamp, scheduling no more than 30 days ahead |
 | `ttl_seconds` | 30–86400 seconds from scheduled acceptance time; default 86400; expiry before MTA handoff |
 | HTTP JSON | Maximum 8 MiB |
@@ -106,10 +106,10 @@ if err != nil { return err }
 ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 defer cancel()
 
-result, err := mailer.Send(ctx, "receipt:"+orderID+":v1", client.SendRequest{
-    From: "receipts@coffee.your-domain.tld", To: []string{buyerEmail},
-    Subject: "Your receipt", Text: "Thank you for your purchase.",
-    Attachments: []client.Attachment{{Filename: "receipt.pdf", ContentType: "application/pdf", Data: pdfBytes}},
+result, err := mailer.Send(ctx, "document-ready:"+documentID+":v1", client.SendRequest{
+    From: "notifications@app-a.your-domain.tld", To: []string{recipientEmail},
+    Subject: "Your document is ready", Text: "Your generated document is attached.",
+    Attachments: []client.Attachment{{Filename: "document.pdf", ContentType: "application/pdf", Data: pdfBytes}},
 })
 if err != nil { return err }
 status, err := mailer.Status(ctx, result.MessageIDs[0])
@@ -130,10 +130,10 @@ const mailer = nodemailer.createTransport({
   auth: { user: process.env.MAIL_TENANT_ID, pass: process.env.MAIL_API_KEY }
 });
 await mailer.sendMail({
-  from: "receipts@coffee.your-domain.tld", to: buyerEmail,
-  subject: "Your receipt", text: "Thank you for your purchase.",
-  messageId: `<receipt-${orderID}-${receiptVersion}@coffee.your-domain.tld>`,
-  attachments: [{ filename: "receipt.pdf", content: pdfBytes }]
+  from: "notifications@app-a.your-domain.tld", to: recipientEmail,
+  subject: "Your document is ready", text: "Your generated document is attached.",
+  messageId: `<document-${documentID}-${documentVersion}@app-a.your-domain.tld>`,
+  attachments: [{ filename: "document.pdf", content: pdfBytes }]
 });
 ```
 
@@ -146,13 +146,13 @@ SMTP `250` after DATA confirms accepted work. Exact deduplication requires retry
 ## Templates
 
 ```sh
-curl -X PUT https://mail-api.your-domain.tld/v1/templates/receipt \
+curl -X PUT https://mail-api.your-domain.tld/v1/templates/notification \
   -H "Authorization: Bearer $SELFMAIL_TEMPLATE_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"subject":"Order {{.OrderID}}","text":"Total: {{.Total}}","html":"<p>Total: {{.Total}}</p>"}'
+  -d '{"subject":"Task {{.TaskID}} completed","text":"Result: {{.Result}}","html":"<p>Result: {{.Result}}</p>"}'
 ```
 
-Then send with `template:"receipt"` and `variables:{"OrderID":"42","Total":"1 500 ₽"}`. Body fields cannot be combined with a template. Versions are immutable and selected during first acceptance. HTML is escaped by `html/template`.
+Then send with `template:"notification"` and `variables:{"TaskID":"42","Result":"Completed"}`. Body fields cannot be combined with a template. Versions are immutable and selected during first acceptance. HTML is escaped by `html/template`.
 
 Rendering has a 500 ms execution budget, operation/iteration limits, and context cancellation, including empty nested ranges. Only JSON values and an allowed function set are accepted. `printf`, `call`, recursive template invocation, and arbitrary Go methods are unsupported; preformat currency/dates in the backend. This constrained contract is intentional.
 
@@ -182,14 +182,14 @@ Deduplicate event IDs and commit the business effect in one receiver transaction
 
 ```mermaid
 sequenceDiagram
-    participant Customer
+    participant Caller
     participant Backend
     participant AppDB as Application DB
     participant Relay as Business outbox relay
     participant Mail as selfmail
-    Customer->>Backend: Pay / change account
+    Caller->>Backend: Request an application operation
     Backend->>AppDB: Commit operation + email task
-    Backend-->>Customer: Operation result
+    Backend-->>Caller: Operation result
     Relay->>AppDB: Claim pending task
     Relay->>Mail: Send with stable business key
     Mail-->>Relay: Accepted IDs
@@ -197,6 +197,21 @@ sequenceDiagram
     Mail-->>Backend: Signed delivery event
 ```
 
-If the relay crashes after acceptance but before saving IDs, it repeats the same key and receives the original IDs. This closes the business-to-mail gap without placing SMTP inside the order transaction. Generate receipt PDFs in the purchase/fiscalization subsystem and attach their bytes.
+If the relay crashes after acceptance but before saving IDs, it repeats the same key and receives the original IDs. This connects an application transaction to email acceptance without placing SMTP inside that transaction. The application chooses which events trigger mail and creates any attachments before requesting delivery. The same flow works for user actions, background jobs, scheduled work, and machine-generated events.
 
 On one server, call `http://127.0.0.1:18080` from a host backend, or connect an application container to a deliberately shared Docker network and give the API a stable alias. Keep mail storage separate from application data. A Docker `core` network is private to its Compose project; another stack does not discover `api` automatically. For separate hosts, use HTTPS and restricted ingress. Domains and tenants are logical ownership boundaries, not a requirement for one VPS per project.
+
+## Release and SDK identity
+
+The maintainer has republished `v0.0.1` to include the optimized implementation and application-neutral documentation, retaining the version number. The original release snapshot is still identified by commit `d446bc9b4b8731c79da4d88f604c31c82a7cceeb`. For server deployments, select a reviewed Git commit or image digest as well as the version label.
+
+Go module proxies authenticate and cache version contents; `go get ...@v0.0.1` may therefore continue to return the original cached module, and fetching changed contents under an existing checksum can fail. See the [Go module version mapping reference](https://go.dev/ref/mod#mapping-versions-to-commits). Check the resolved module before assuming its version label identifies the republished server build. The SDK API did not change between the original and optimized server implementations.
+
+For the reviewed SDK implementation used by the optimized server, request its immutable commit explicitly:
+
+```sh
+go get github.com/Elmar006/selfmail/pkg/client@c36df95447f92640e972af846d14e5d46604398a
+go list -m -json github.com/Elmar006/selfmail
+```
+
+Go records the resolved commit as a pseudo-version. Keep that result in `go.mod`/`go.sum`; do not disable checksum verification to accept changed contents under a cached tag. This SDK revision differs from the republished documentation snapshot only in documentation.

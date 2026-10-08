@@ -173,7 +173,7 @@ SQL cleanup uses bounded passes and quickly schedules continuation while work re
 
 | Boundary | Guarantee and limit |
 |---|---|
-| Application business transaction | Requires the application's own outbox to connect order/account changes to a mail request |
+| Application business transaction | Requires the application's own outbox to connect committed state changes to a mail request |
 | HTTP `202` / submission `250` | Durable accepted job and independent acceptance evidence; recoverability depends on retained SQL/evidence backups |
 | Broker delivery | At least once; duplicate references are expected and guarded by SQL claims |
 | Worker → Postfix | Confirmed handoff transfers ownership; ambiguity stays blocked until reconciliation/operator action |

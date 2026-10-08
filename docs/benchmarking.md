@@ -4,7 +4,7 @@
 
 ## Method and success criteria
 
-The benchmark creates three fresh tenants and sender domains. Their configured tenant rate is 10,000/s to avoid mistaking a low project quota for service capacity; this does not change process budgets, Redis's 20/s destination bucket, CPU/memory ceilings, or Postfix settings. Each request has one recipient, a unique idempotency key, a fixed-size synthetic body, and an optional random-byte binary attachment. Random data avoids favorable TOAST compression of repeated-character fixtures; it is not a generated purchase receipt. Requests cycle through the three priorities. Setup/domain-key generation is excluded from the timed workload.
+The benchmark creates three fresh tenants and sender domains. Their configured tenant rate is 10,000/s to avoid mistaking a low project quota for service capacity; this does not change process budgets, Redis's 20/s destination bucket, CPU/memory ceilings, or Postfix settings. Each request has one recipient, a unique idempotency key, a fixed-size synthetic body, and an optional random-byte binary attachment. Random data avoids favorable TOAST compression of repeated-character fixtures; it is not a generated application document. Requests cycle through the three priorities. Setup/domain-key generation is excluded from the timed workload.
 
 Clients send continuously without a fixed interval, with at most `-concurrency` requests in flight. This is a **closed-loop** measurement: request latency affects offered load. Latency starts at each request, not at hypothetical arrival times in an open-loop schedule. It does not establish a latency SLA under arbitrary arrivals or the absolute maximum capacity.
 
@@ -61,7 +61,7 @@ Changing `-recipient-domains` varies the Redis destination buckets; it does not 
 
 ## Diagnose and tune the pipeline
 
-Current code batches the outbox, broker confirmations, log SQL commits, and log-journal durability barriers. It preserves persistent messages, mandatory routing, publisher confirmations, immutable evidence, synchronous durability, and the default process limits. See the measured comparison in [verification](verification.md).
+The service batches the outbox, broker confirmations, log SQL commits, and log-journal durability barriers. It preserves persistent messages, mandatory routing, publisher confirmations, immutable evidence, synchronous durability, and the default process limits. See the measured comparison in [verification](verification.md).
 
 1. Keep tenant rate/daily/backlog/payload policy appropriate to the application. For a capacity probe, record both tenant and destination policies, rather than silently removing them.
 2. Look at `selfmail_work_seconds` per process: long `journal_lock_wait`/`journal_write` points to the serialized durable journal; long `outbox_publish` with little journal wait points to SQL/broker work; a slow reconciler can delay the final delivered status. Histograms include bounded batches and idle dispatcher polls, so compare workload-window deltas rather than interpreting every observation as one message.

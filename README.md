@@ -20,14 +20,17 @@ Developed by **[Эльмар](https://github.com/Elmar006)**. The project is fre
 
 ## Who it is for
 
-| Project | Example emails |
-|---|---|
-| Coffee shop | Purchase receipts, password resets, account changes, login notifications |
-| Jewelry store | Order confirmations, PDF invoices, payment and delivery updates |
-| SaaS or internal platform | Verification links, security alerts, technical notifications |
-| Several applications | One installation with a tenant and restricted API key per project |
+selfmail is for developers and teams that need a reusable transactional email service in their applications, APIs, background jobs, or internal systems. Its integration contract is independent of the application's industry and programming language.
 
-Install selfmail beside your application on the same Linux server or on a separate mail host. The network contract supports any backend language. Receipt generation, payment processing, and token validation stay in your application.
+| Use case | Example emails |
+|---|---|
+| Account lifecycle | Address verification, password resets, profile changes |
+| Security events | Login notifications, access changes, security alerts |
+| Application events | Status updates, task completion, service notifications |
+| Documents and reports | Generated files, exports, scheduled reports |
+| Multiple applications | One installation with a tenant and restricted API key per application |
+
+Install selfmail beside your application on the same Linux server or on a separate mail host. Applications define business rules, token validation, document generation, and when to request an email; selfmail handles acceptance, queuing, delivery, and feedback.
 
 ## What is included
 
@@ -66,7 +69,7 @@ git clone https://github.com/Elmar006/selfmail.git
 cd selfmail
 sh scripts/init-local.sh
 docker compose up -d --build --wait
-docker compose exec worker selfmail tenant create --name coffee --domain coffee.example.test
+docker compose exec worker selfmail tenant create --name app --domain app.example.test
 ```
 
 On Windows, use `pwsh -File scripts/init-local.ps1` instead of the shell initializer when script execution is permitted, or use WSL. Initialization generates secrets and preserves existing configuration. Save the API key from `tenant create`; it is shown once. Set `SELFMAIL_API_KEY` in your shell to that key for the request below.
@@ -75,8 +78,8 @@ On Windows, use `pwsh -File scripts/init-local.ps1` instead of the shell initial
 curl http://localhost:18080/v1/messages \
   -H "Authorization: Bearer $SELFMAIL_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: coffee:receipt:order-42:v1" \
-  -d '{"from":"receipts@coffee.example.test","to":["customer@example.net"],"subject":"Your receipt","text":"Thank you for your purchase.","priority":"normal"}'
+  -H "Idempotency-Key: app:notification:event-42:v1" \
+  -d '{"from":"notifications@app.example.test","to":["recipient@example.net"],"subject":"Task completed","text":"Your task has completed.","priority":"normal"}'
 ```
 
 Open the [local inbox](http://localhost:18025). Development routes every message to the sink, including messages addressed to real domains.
@@ -98,8 +101,8 @@ import "github.com/Elmar006/selfmail/pkg/client"
 
 mailer, err := client.New("http://localhost:18080", apiKey)
 if err != nil { return err }
-result, err := mailer.Send(ctx, "coffee:password-reset:"+requestID, client.SendRequest{
-    From: "accounts@coffee.example.test",
+result, err := mailer.Send(ctx, "app:password-reset:"+requestID, client.SendRequest{
+    From: "accounts@app.example.test",
     To: []string{userEmail},
     Subject: "Reset your password",
     Text: "Open your single-use reset link: " + resetURL,
@@ -107,7 +110,7 @@ result, err := mailer.Send(ctx, "coffee:password-reset:"+requestID, client.SendR
 })
 ```
 
-For receipts, commit the order and an email task in **your application's transactional outbox**, then call selfmail asynchronously. The [integration guide](docs/integration.md) covers Go, SMTP/Nodemailer, webhooks, domain onboarding, retries, and this business flow.
+Commit an application state change and its email task in **your application's transactional outbox**, then call selfmail asynchronously. The [integration guide](docs/integration.md) covers Go, SMTP/Nodemailer, webhooks, domain onboarding, retries, and reliable event-to-email integration.
 
 ## Resources and requirements
 
@@ -115,9 +118,9 @@ For receipts, commit the order and an email task in **your application's transac
 
 Configured memory ceilings sum to **3.75 GiB for core services**, or **4.5 GiB with monitoring, backup, and Caddy**, excluding builds/tests and the OS. Consumption is normally below those ceilings. [Resource sizing](docs/resources.md) gives measured samples, individual limits, and disk assumptions.
 
-**Measured development throughput after 0.0.1:** two runs delivered **1200/1200 messages in 78.7 and 121.5 seconds**, with zero API errors or extra copies. Corresponding baseline rechecks took **134.0 and 189.0 seconds**. All used 1 KiB bodies, three tenants, two concurrent clients, unchanged service CPU/memory limits, the default Redis destination policy, and a local Postfix relay with its destination delay temporarily set to `0s`. The shared host/storage produced substantial variation; these are finite observations, not a constant-rate guarantee. Larger random 2 MiB attachments completed 96/96 in 31.0 seconds on the development code.
+**Measured local throughput:** two runs of the optimized implementation delivered **1200/1200 messages in 78.7 and 121.5 seconds**, with zero API errors or extra copies. Corresponding baseline rechecks took **134.0 and 189.0 seconds**. All used 1 KiB bodies, three tenants, two concurrent clients, unchanged service CPU/memory limits, the default Redis destination policy, and a local Postfix relay with its destination delay temporarily set to `0s`. The shared host/storage produced substantial variation; these are finite observations, not a constant-rate guarantee. Larger random 2 MiB attachments completed 96/96 in 31.0 seconds on the optimized implementation.
 
-The published **0.0.1 tag/images retain their original code** and earlier 1200/114-second result. The optimized code adds bounded broker/outbox batches, grouped log-journal durability, transactional log batches, and consumer backpressure. Build the current source to use it; see [measured comparisons and failure tests](docs/verification.md).
+The updated **0.0.1 release** includes bounded broker/outbox batches, grouped log-journal durability, transactional log batches, and consumer backpressure. Earlier results, including 1200 messages in 114 seconds, refer to the original source snapshot. [Verification](docs/verification.md) identifies the measured commits, and [integration](docs/integration.md#release-and-sdk-identity) explains how to select a reproducible source or SDK build.
 
 With stock Postfix `1s` pacing to that single relay, 120/120 messages completed in 121 seconds while the API accepted them at 23.3/s. The older **900 messages in 30 minutes** result was a stability soak intentionally offered at **0.5/s**, **not a capacity limit**. These are measured local profiles, not maximum-throughput or Internet-delivery guarantees. See the [benchmark method](docs/benchmarking.md) and [verification results](docs/verification.md).
 
