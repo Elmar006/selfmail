@@ -2,7 +2,7 @@
 
 Resource use depends on retained payload size, attachment frequency, remote deferrals, backup work, and history. Acceptance rate is not delivery rate. A fast local sink cannot model slow or rejecting Internet MX servers.
 
-The historical **900 messages in 30 minutes** was a fixed-rate stability workload intentionally set to **0.5/s**, not a capacity result. Separate unpaced measurements delivered 1200 small messages in 114 seconds with the local Postfix delay set to `0s`, while preserving service CPU/memory ceilings. See the exact workloads, both acceptance/delivery rates and limits in [verification](verification.md), and the [benchmark method](benchmarking.md).
+The historical **900 messages in 30 minutes** was a fixed-rate stability workload intentionally set to **0.5/s**, not a capacity result. The 0.0.1 unpaced profile delivered 1200 small messages in 114 seconds with the local Postfix delay set to `0s`. Current development code batches dispatch and reconciliation with the same default CPU/memory limits; measured comparisons and variation are in [verification](verification.md), with definitions in the [benchmark method](benchmarking.md).
 
 ## Planning envelope
 
@@ -60,6 +60,14 @@ The 0.0.1 throughput profiles used the same Docker/Linux VM (12 logical CPUs, ab
 | Development sink, outside core sizing | 50.55 |
 
 These are sampled working sets, not reserved RAM, total host memory, absolute peaks, or the cost of the earlier long soak/backup/history profiles. The retained measurement window contains 72 sampling cycles from 18:48:30 to 18:57:22 UTC; a nominal five-second loop also spends time collecting statistics and cannot prove absolute peaks. The generator/compiler is outside the table and ran in a separate test container capped at 2 GiB / 2 CPUs. Sampled per-service maxima do not necessarily occur simultaneously. All running service containers were inspected afterward: no OOM kill or restart was recorded. Stock Postfix pacing was restored after benchmarking.
+
+## Resources during the batching comparison
+
+The optimized small-body profile retained the same limits above. A partial sampling window on October 8, **21:57:15–21:59:14 UTC**, captured 24 cycles covering the latter part of the 78.701-second run and subsequent idle time. Peak observed working sets were API **14.73 MiB**, worker **15.49 MiB**, reconciler **16.82 MiB**, PostgreSQL **124.0 MiB**, and RabbitMQ **176.2 MiB**. The test/generator container reached **59.29 MiB** in this window and is outside runtime sizing. The window does not cover the full workload and does not establish absolute peaks or attachment memory requirements.
+
+The worker's cgroup reported **zero throttled periods** after that initial run. Aggregate time spent inside the serialized journal write lock was about **71.0 seconds** (API + worker + reconciler), versus **78.7 seconds** to complete delivery confirmations. This measures the complete lock-held write path, including validation, encryption, filesystem work and durability barriers; it is not an isolated disk `fsync` microbenchmark. The second optimized run accumulated about **113.3 seconds** in that same path and completed in **121.5 seconds**, illustrating the sensitivity to the shared host/storage conditions. Raising the MIME consumer count or RAM does not by itself remove this barrier.
+
+Grouped journal records keep their individual files and checksums. A temporary encrypted batch descriptor is additionally bounded at 3 MiB; steady RAM/storage caps and the 10 GiB committed-journal capacity remain unchanged. See the [recovery compatibility notes](recovery.md).
 
 ## Earlier fixed-rate soak and history profile
 

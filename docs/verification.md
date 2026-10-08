@@ -69,6 +69,37 @@ An initial overload probe used 8 API clients and 120 requests: **2 accepted, 118
 
 These are finite closed-loop local workloads, not an absolute saturation curve, sustained multi-hour capacity, Internet delivery guarantee, or tested VPS SLA. Different run lengths and host activity produce different observed rates; the results are not averaged into an unsupported headline maximum. Delivery rate includes queue drain and SQL confirmation; acceptance rate describes the API. Detailed definitions, safeguards and commands are in [benchmarking](benchmarking.md). Resource samples are in [resources](resources.md).
 
+## Batching comparison after 0.0.1
+
+The optimized implementation is development code after the immutable 0.0.1 release: core change **`93938aa`**, followed by **`bebce3d`** exposing the destination rate without changing its default. No schema migration, API/SDK contract change, resource-limit increase, or removal of durable-write/confirm checks is required.
+
+The comparison retained the same Docker/Linux host and service limits, three fresh tenants per workload, 1200 one-recipient requests, 1 KiB bodies, client concurrency two, Redis destination policy 20/s, Postfix destination concurrency 5/grouping 50, and the single controlled development sink. Only local Postfix destination delay was temporarily `0s`. Other application containers remained active; host/storage conditions were not isolated.
+
+| Runtime / storage state | API acceptance window | Accepted/s | All delivery confirmations | Confirmed end-to-end/s | API p95 / p99 |
+|---|---:|---:|---:|---:|---:|
+| 0.0.1-equivalent core + timing hooks; fresh storage | 82.899 s | 14.48 | 134.012 s | 8.95 | 418.13 / 828.89 ms |
+| Optimized `93938aa`; fresh storage | 77.694 s | 15.45 | 78.701 s | 15.25 | 323.98 / 676.93 ms |
+| Optimized `bebce3d`; repeat after preceding workload, same default policy | 120.485 s | 9.96 | 121.496 s | 9.88 | 630.45 / 1192.31 ms |
+| 0.0.1-equivalent core; recheck on accumulated completed history | 111.002 s | 10.81 | 189.022 s | 6.35 | 556.24 / 1075.31 ms |
+
+All four workloads had **1200 accepted, 1200 delivered, zero API errors, zero missing copies, and zero extra sink copies**. Their run IDs were `3ba2b4f5-eb95-42fb-b2b6-7ecb22b6bf7f`, `cb04b2a5-4ae3-45fe-9d13-4ca408f47dec`, `8bfc561d-79c6-4453-928f-596af478a20c`, and `e2cf3abe-9231-477d-b75b-d4c0cfca7a3c`; start times were October 8 at 21:38:15, 21:56:39, 22:06:02, and 22:10:09 UTC, respectively. Both baseline images differ from `d446bc9` only by the same timing hooks used in the optimized code.
+
+The fresh comparison observed **1.70 times** the end-to-end rate and about **41% less completion time**. The slower optimized repeat is retained explicitly: it does not establish a constant 15/s rate or a guaranteed 70% improvement under every host condition. The original release's earlier 114-second run is a separate measurement; it was not substituted for the new baseline.
+
+The later baseline recheck confirmed the same bottleneck under slower conditions: it needed **78.02 seconds of queue drain** and SQL delivery latency p50/p95 of **81.53/99.61 seconds**. The optimized repeat's 121.496 seconds versus this baseline's 189.022 seconds corresponds to **1.56 times** the observed end-to-end rate, with a slower API acceptance window. These sequential runs shared completed history and active host workloads; they are not randomized statistical trials. The legacy baseline also successfully validated/read the completed v1 journal history written by the grouped implementation before this workload.
+
+The initial optimized queue-drain interval fell from **51.11 to 1.01 seconds**. SQL delivery latency p50/p95 fell from **53.09/66.13 seconds** to **1.01/1.88 seconds**; the slower repeat still observed **1.28/2.57 seconds**. The change removes a large confirmation backlog while acceptance throughput remains sensitive to the serialized journal.
+
+Recorded timing sums for the initial comparison were outbox operations **110.66 → 27.94 seconds**, reconciliation **131.80 → 26.50 seconds**, and time holding the journal write lock **103.58 → 71.02 seconds** across the relevant processes. These are operation sums, not isolated component benchmarks; batches/idle polls and overlapping processes must be accounted for. The slower repeat spent **113.33 seconds** in the journal write path. See the scope of [resource samples](resources.md).
+
+An intermediate implementation batched broker/SQL work but still wrote each log journal record separately: it completed 1200/1200 in **97.616 seconds**, with API acceptance **95.610 seconds**, zero errors and extra copies. This exposed increased ingress contention and led to grouped journal durability rather than using its faster delivery rate as the final result.
+
+The final full formatting/module/race/vet/build/govulncheck pipeline passed against real PostgreSQL, RabbitMQ, and Redis. Added regressions cover partial broker success, mandatory returns/Nacks/closed channels/timeouts, replay of all uncommitted outbox references, duplicate claims, waiting-slot cancellation, SQL batch rollback/cursors/terminal outcomes, partial/oversized log tails, mixed journal writers, seven interrupted batch phases, rejection of lost sealed history, and independent-journal reconciliation of older SQL state using grouped log records.
+
+The final `bebce3d` runtime also passed the complete acceptance flow after restoring stock Postfix delay to `1s`: REST/outbox/RabbitMQ/worker/Postfix/sink/delivered, three tenants, SMTP AUTH, DKIM, attachments, templates, idempotency, RLS, quotas, cancellation, relay protection, hard bounce, late DSN, and signed callbacks. Final running containers reported no OOM kill or automatic restart; intentional image replacements are separate from restart counters.
+
+A larger-payload check on `bebce3d` sent **96 messages with a random 2 MiB attachment each**: acceptance **29.325 seconds / 3.27/s**, complete delivery confirmation **31.003 seconds / 3.10/s**, API p95/p99 **1704.31/2587.86 ms**, zero errors/missing/extra copies. Run `03946515-9fe0-41b9-abd6-1ffb2edfdab8` started at 22:14:44 UTC. This is slower than the earlier release's 17.796-second attachment profile on different host conditions; it is retained as a payload check, and no attachment-throughput improvement is claimed. Benchmark the application's actual receipt sizes and payload mix rather than extrapolating the small-body comparison.
+
 ## Fixed-rate stability and earlier resource evidence
 
 The separate mixed-payload soak generator cycles through three tenants/priorities, includes 2 MiB PDF attachment bytes, and sends a near-5-MiB UTF-8 body periodically. It requires the fixed development API/sink URLs. Its `-interval 2s` schedules 0.5 requests/s and does not search for a throughput ceiling.

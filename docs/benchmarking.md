@@ -59,6 +59,19 @@ docker compose exec -T postfix postfix reload
 
 Changing `-recipient-domains` varies the Redis destination buckets; it does not create multiple SMTP relays. Record this setting rather than implying that a many-domain profile applies to a single recipient domain. For larger attachment work, use `-attachment-bytes 2097152` and reduce the count. The command bounds concurrency, message count, payload sizes and per-tenant retained bytes. Sink copy counters retain up to 10,000 distinct IDs; the tool checks remaining capacity before sending. Use a fresh isolated sink when that capacity would be exceeded.
 
+## Diagnose and tune the pipeline
+
+Current code batches the outbox, broker confirmations, log SQL commits, and log-journal durability barriers. It preserves persistent messages, mandatory routing, publisher confirmations, immutable evidence, synchronous durability, and the default process limits. See the measured comparison in [verification](verification.md).
+
+1. Keep tenant rate/daily/backlog/payload policy appropriate to the application. For a capacity probe, record both tenant and destination policies, rather than silently removing them.
+2. Look at `selfmail_work_seconds` per process: long `journal_lock_wait`/`journal_write` points to the serialized durable journal; long `outbox_publish` with little journal wait points to SQL/broker work; a slow reconciler can delay the final delivered status. Histograms include bounded batches and idle dispatcher polls, so compare workload-window deltas rather than interpreting every observation as one message.
+3. Measure durable-write latency on the deployed filesystem. Faster storage can help a journal-bound workload. Extra RAM or consumers alone cannot remove a serialized durability barrier. Keep the journal and independent head on persistent storage with the recovery protocol intact.
+4. Increase process CPU only when utilization/throttling or MIME/signing work supports it. `WORKER_CONCURRENCY` counts consumers per priority, while expensive worker work remains bounded at four simultaneous messages. API callers still need backpressure at concurrency two. Replicas multiply memory/work budgets and must share the compatible single-host recovery storage.
+5. `DESTINATION_RATE_PER_SECOND` defaults to **20**, accepts **1..1000**, and sets the shared Redis recipient-domain token bucket (burst capacity equals the rate). Use the same value for all workers sharing Redis. Change it only when that policy is the bottleneck and recipient MX responses/reputation permit the intended rate; increasing it does not increase journal/storage capacity. Tenant quotas and Postfix pacing still apply independently.
+6. For identical-content notifications, the existing send contract accepts up to 100 recipients in one batch, with separate message IDs and deliveries. This amortizes ingress payload/acceptance work; use separate requests for different personalized bodies. The recorded one-recipient benchmarks do not measure this optimization.
+
+Keep Postfix's production destination pacing appropriate to receiving servers. The `0s` command above is for the controlled local relay experiment. Internet delivery throughput requires its own evidence.
+
 ## Report a result
 
 Record the source revision, host/VM resources, service CPU/memory quotas, concurrent host workloads, request count, payload bytes, client concurrency, tenant/destination limits, exact Postfix settings, API errors, both rates, latency percentiles, drained outcomes, copy counts, and resource observations. Short bursts, soak tests, overload probes and Internet delivery tests answer different questions. Do not extrapolate a short local rate into guaranteed daily delivery or a VPS SLA. Measured runs and their scope are recorded in [verification](verification.md) and [resources](resources.md).

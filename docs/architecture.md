@@ -98,6 +98,12 @@ RabbitMQ uses durable quorum queues for `critical`, `normal`, and `bulk`, with p
 
 The outbox row is marked published only after a routing/confirm success. A crash after a broker confirm but before SQL commit can produce a duplicate reference. Workers claim through PostgreSQL; redelivery does not authorize another SMTP attempt. Expired preparing leases are recovered. Ready messages with no pending/recent published outbox reference are republished by the watchdog.
 
+The dispatcher selects up to **32 due references** with `FOR UPDATE SKIP LOCKED`, pipelines their persistent publications, waits for every publisher confirmation and mandatory return, and commits the outbox rows together. The broker adapter bounds in-flight publications and notification buffers at 64. Any partial failure leaves the entire SQL batch pending; confirmed references can be replayed safely through the same exclusive message claim. Connections with uncertain confirmations are discarded before retrying.
+
+Consumers retain prefetch **1** and wait for the shared four-slot MIME budget before claiming/loading a body. A busy process applies backpressure without a Nack/reconnect cycle or spending RabbitMQ's delivery limit. The API keeps its separate two-slot admission budget and temporary overload responses.
+
+The reconciler processes at most **32 complete log lines** per SQL transaction, preserving log order and updating the cursor only after that transaction succeeds. Per-node advisory serialization and sorted message locks avoid conflicting receipt associations and batch lock-order inversions. Duplicate lines remain idempotent; an incomplete final line stays behind the persisted cursor. Parsed evidence retains a separate immutable record for each original node/file/offset.
+
 The shipped broker has one node. A quorum queue on one node supplies durability but does not provide node-loss HA. The dead-letter queue requires operational inspection; it has no automatic purge and its disk use must be included in sizing.
 
 ## Delivery state

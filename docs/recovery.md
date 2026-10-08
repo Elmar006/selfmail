@@ -121,6 +121,10 @@ An export may omit deliveries after its sealed boundary. If the newest evidence/
 
 The journal fails closed if a pending write, missing record, altered manifest, lost tail/head, or wrong key is detected. Under hold, `recovery repair-journal` can complete the supported authenticated interrupted-write state; it is not a general command to discard arbitrary corruption. Restore a consistent independently verified snapshot when evidence cannot be repaired.
 
+Current development code groups up to 32 parsed log records behind common durability barriers. The immutable record, manifest-entry and independent head formats remain v1. Each record file is synced before the manifest and head are sealed; success is reported only after those barriers and pending-marker removal. API acceptance and SMTP intent/outcome writes retain their synchronous per-operation barriers.
+
+A **v2 pending-batch descriptor**, encrypted with the instance-bound journal key, temporarily contains the exact uncommitted ciphertext, manifest suffix, and base/target heads. Under hold, the current `repair-journal` can finish missing uncommitted files or an authentic partial suffix and seal that exact target. It cannot recreate a record already sealed by the current independent head, truncate committed history, or accept a mismatched head/suffix. The descriptor is bounded at 3 MiB and removed durably after completion. An interrupted batch requires this updated repair implementation; resolve pending work before downgrading to 0.0.1. Ordinary completed journal history remains readable by its v1 reader.
+
 Capacity is checked against `JOURNAL_MAX_BYTES` and filesystem reserve. There is no automatic evidence compaction or deletion. Increase storage/capacity through a reviewed held operation or implement a verified future compaction strategy covering all retained backups. Deleting `.enc` files or the sealed head to make space destroys the safety proof.
 
 ## Readiness boundary

@@ -73,6 +73,7 @@ ALLOW_PRIVATE_WEBHOOKS=false
 SMTP_TLS_CERT=/secrets/fullchain.pem
 SMTP_TLS_KEY=/secrets/privkey.pem
 WORKER_CONCURRENCY=2
+DESTINATION_RATE_PER_SECOND=20
 JOURNAL_MAX_BYTES=10737418240
 MAX_WIRE_BYTES=10485760
 ```
@@ -106,6 +107,8 @@ Enable observability with `--profile observability`. The repository supplies pro
 Monitor API error rate/acceptance latency, oldest ready job/outbox age, consumer count, component progress, unknown attempts, unresolved dead callbacks, WAL archive failures, MTA log freshness, spool disk availability/growth, journal capacity, backup success time, filesystem/inode capacity, certificate expiry, and destination bounce/deferral trends. Backup success is recorded in `/var/lib/pgbackrest/status/success`; a dedicated backup-freshness/certificate/journal-capacity alert integration is operator work in this version.
 
 Metric labels avoid recipient addresses and tenant IDs. An idle component's last log line is not sufficient proof of failure; combine progress with pending work. Counters aggregate asynchronously rather than scanning all message history for each scrape.
+
+The `selfmail_work_seconds` histogram has stages `journal_lock_wait`, `journal_write`, `outbox_publish`, and `reconciliation`. Read its `_sum`/`_count` or quantiles from `_bucket` per process; sums from concurrent processes can exceed elapsed wall time. A journal observation describes one operation, which can now contain several log records. These metrics contain no recipient or tenant labels.
 
 ## Routine controls
 
@@ -155,7 +158,7 @@ Make the replacement file readable by the command's UID through a targeted mount
 | Completed file dedupe/cursors | 92 days |
 | Independent journal | Append-only; capacity bound, no automatic compaction |
 
-These are minimum ages for eligibility, not statutory or exact deletion deadlines. Active work, unknown handoffs, pending callbacks, and cleanup failure extend retention. Change the policy through a reviewed implementation/configuration change for your legal/business requirements; only journal/MIME capacity limits are environment-configurable in this release.
+These are minimum ages for eligibility, not statutory or exact deletion deadlines. Active work, unknown handoffs, pending callbacks, and cleanup failure extend retention. Change the policy through a reviewed implementation/configuration change for your legal/business requirements. Retention horizons are not environment-configurable; journal/MIME capacities and, in current development code, the destination delivery rate are.
 
 Retention retirement decisions are durable outside SQL before commit. If the cleanup transaction fails after recording a retirement, normal SQL may temporarily retain eligible rows; subsequent reconciliation applies the recorded decision. A 90-day key can be reused only after its tombstone is actually retired/deleted. SQL metadata returns `410` while the tombstone remains.
 
